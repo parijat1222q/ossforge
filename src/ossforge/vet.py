@@ -21,7 +21,15 @@ CLAIM_RE = re.compile(
 
 
 def comment_claims_issue(body: str) -> bool:
-    return bool(CLAIM_RE.search((body or "").replace("’", "'")))
+    text = (body or "").replace("’", "'")
+    if CLAIM_RE.search(text):
+        return True
+    # First-person completed work plus a concrete fork destination. Suggestions
+    # and unprepared plans are not enough to infer an existing implementation.
+    return bool(re.search(
+        r"\bi(?: have|'ve)? (?:"
+        r"(?:prepared|pushed) (?:a |this |the )?(?:fix|patch)\b[^.!?\n]{0,100}\b(?:to|on) my fork|"
+        r"have (?:this |the |a )(?:fix|patch) pushed to my fork)", text, re.I))
 
 
 def resolution_evidence(comments: list[dict]) -> str:
