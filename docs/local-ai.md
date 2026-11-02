@@ -99,6 +99,8 @@ assistant and repository processes with filesystem/account access can bypass or
 alter local state. This contract is not a signed attestation or credential boundary.
 The current hook and CLI do not provide automated model retry, accounting,
 container provisioning, fixed whole-run deadline or robust arbitrary check setup.
+Optional Linux native-verification containment is described below; it does not
+isolate the coding assistant or install dependencies.
 
 ## Optional bounded local command runner
 
@@ -180,3 +182,48 @@ Only `fix` and `both` are supported; unknown values stop before remote work.
 This selects discovery work, not eligibility: normal policy, claims, duplicate,
 verification and publication gates remain. A completed fix-only no-find is still
 not proof that no useful bug exists.
+
+## Optional isolated verification (Linux)
+
+Set this in the same selected config when native test/check subprocesses must run
+without network or access to the ordinary home directory:
+
+```yaml
+verification_isolation: bwrap
+verification_readonly_paths:
+  - /absolute/path/to/prepared-venv
+  - /absolute/path/to/interpreter-runtime
+```
+
+Install Bubblewrap separately using your OS's supported package process. A
+missing binary, unsupported kernel namespace, invalid mount or launch failure
+stops verification, with no host-command fallback. The namespace capability
+probe runs before reverting source files. The default `none` preserves existing
+behavior and is not isolation.
+
+The same config applies to `agent-verify`, `agent-run`'s result verification and
+manual `verify`. It is chosen by the operator, not supplied by the result JSON.
+Use an explicit prepared native test argv and any required native check argv.
+Manual verification refuses automatic dependency installation in isolated mode.
+Prepare dependencies separately before starting. No credentials belong in the
+mounted paths. An interpreter installed outside system directories, including a
+venv's symlink target, needs its own explicit runtime mount. Relative, symlink,
+checkout-overlapping and broad private/system-data mounts are refused. Explicit
+runtime paths are read-only but visible to test code: choose them narrowly.
+
+Test/check commands get a read-only checkout at its existing absolute path,
+read-only system executables/libraries and explicit prepared runtimes, a fresh
+`/tmp` and home, no network, dropped capabilities and a cleared environment.
+Commands must write generated/build/coverage files to temporary storage and use
+already-prepared artifacts where required. Projects needing in-tree generated
+files or online checks can fail here; a failed setup is not a product regression.
+The local receipt records the selected mode and runtime paths, not an attestation.
+
+This confines verification subprocesses only. Host Git operations, dependency
+provisioning, the external assistant/driver and publication are outside this
+boundary. It is not an adversarially audited universal sandbox, a kernel exploit
+defense, automatic project setup or isolation of an authenticated coding
+assistant. Mounts define what tests can read, and operator-selected runtime
+mounts must not contain private data. Do not mark issue27 complete from this
+feature alone. Real useful external coding, native verification and permitted
+upstream publication still need their own end-to-end evidence.

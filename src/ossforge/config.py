@@ -12,6 +12,8 @@ HARD_DAILY_MAX = 2  # not configurable above this
 
 @dataclass
 class Config:
+    verification_isolation: str = "none"  # none | bwrap: isolate native test/check subprocesses only
+    verification_readonly_paths: list[str] = field(default_factory=list)  # prepared runtimes, never credentials
     maintainer_admission: bool = False  # opt-in manifest/issue-label scope plus draft-only publication
     daily_cap: int = 2
     pr_only_repos: list[str] = field(default_factory=list)  # explicitly reviewed targets: no new issue for new work

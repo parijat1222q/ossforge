@@ -66,7 +66,7 @@ def parse(path: Path) -> dict:
     return data
 
 
-def complete(queue: Queue, result: dict) -> dict:
+def complete(queue: Queue, result: dict, *, isolation_mode: str = "none", readonly_paths: list[str] | None = None) -> dict:
     item = queue.items.get(result['id'])
     if not item or item.status != 'clean' or not item.clone:
         raise Invalid('result must target an existing clean cloned candidate')
@@ -78,7 +78,7 @@ def complete(queue: Queue, result: dict) -> dict:
     if current['branch'] != result['branch']:
         raise Invalid('result branch does not match active checkout')
     outcome = verify.verify_fix(clone, base, Path('unused'), [], test_command=result['test_command'],
-                                check_commands=result['check_commands'], failure_code=result['failure_code'])
+                                check_commands=result['check_commands'], failure_code=result['failure_code'], isolation_mode=isolation_mode, readonly_paths=readonly_paths)
     if not outcome.ok:
         return {'schema': 1, 'status': 'verification_failed', 'id': item.id, 'log': outcome.log}
     queue.set(item.id, status='verified', branch=result['branch'], verification=outcome.evidence,

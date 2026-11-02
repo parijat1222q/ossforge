@@ -16,3 +16,8 @@ cooldown_days: 14
 auto_submit: false        # true: the loop submits already-verified items by itself
 patch_command: ""         # optional shell command; env OSSFORGE_ITEM is the item id
 own_orgs: []             # orgs that are yours: repos there are ignored by bootstrap. Orgs you merely belong to are listed, not counted
+
+# Optional Linux native-test/check containment. Default none is not isolation.
+# Dependencies/interpreters must be prepared separately; no network inside.
+verification_isolation: none  # none | bwrap, requested unavailable never falls back
+verification_readonly_paths: []  # explicit absolute prepared runtime directories

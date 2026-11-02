@@ -318,7 +318,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1
     elif a.cmd == "agent-verify":
         try:
-            result = driver.complete(q, driver.parse(Path(a.result_file)))
+            result = driver.complete(q, driver.parse(Path(a.result_file)),
+                                     isolation_mode=cfg.verification_isolation, readonly_paths=cfg.verification_readonly_paths)
         except (driver.Invalid, OSError, evidence.StaleEvidence) as exc:
             print(f"REFUSED: {exc}", file=sys.stderr)
             return 1
@@ -355,6 +356,9 @@ def main(argv: list[str] | None = None) -> int:
             print("commands must not be empty", file=sys.stderr)
             return 2
         py = Path(sys.executable)
+        if test_command is None and cfg.verification_isolation != "none":
+            print("isolated verification needs an explicit prepared --test-command; automatic install is disabled", file=sys.stderr)
+            return 1
         if test_command is None:
             py = verify.venv_python(Path(cfg.work_dir), it.repo)
             rc, out = verify.install_project(py, clone, a.install)
@@ -363,7 +367,8 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
         base = submit._run(["git", "merge-base", "HEAD", "origin/HEAD"], str(clone))
         r = verify.verify_fix(clone, base, py, a.tests, test_command=test_command,
-                              check_commands=checks, failure_code=a.failure_code)
+                              check_commands=checks, failure_code=a.failure_code, isolation_mode=cfg.verification_isolation,
+                              readonly_paths=cfg.verification_readonly_paths)
         print("failed without fix:", r.failed_without_fix, "| passed with fix:", r.passed_with_fix, "| lint ok:", r.lint_ok)
         stats.record_kind(it.kind, r.ok)
         stats.save()

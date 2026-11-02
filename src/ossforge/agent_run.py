@@ -108,7 +108,8 @@ def _run(cfg, command, timeout, attempts, execute, discover, journal):
         result = driver.parse(result_file)
         if result['id'] != item_id or result['base'] != job['base']:
             raise driver.Invalid('driver result does not match assigned item/base')
-        checked = driver.complete(q, result)
+        checked = driver.complete(q, result, isolation_mode=cfg.verification_isolation,
+                                  readonly_paths=cfg.verification_readonly_paths)
         journal.note(f'verification: {checked["status"]}')
         if checked['status'] != 'verified':
             journal.data['outcome'] = checked['status']

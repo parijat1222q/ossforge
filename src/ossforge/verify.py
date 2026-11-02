@@ -1,8 +1,8 @@
 """Verification: a candidate is only real if a new test FAILS without the fix and PASSES with it.
 
-Runs repo commands in a per-repo venv with a scrubbed environment (no GitHub or
-cloud tokens). That is hygiene, not isolation: set ``docker: true`` style
-isolation up separately for untrusted repos.
+Default commands use a scrubbed environment, which is hygiene, not isolation.
+Optional bwrap mode confines native test/check subprocesses with no network,
+a private home and read-only checkout plus explicitly prepared runtime mounts.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import evidence, predictor
+from . import evidence, predictor, isolation
 
 SAFE_ENV_KEYS = ("PATH", "SYSTEMROOT", "TEMP", "TMP", "HOME", "USERPROFILE", "LANG", "PYTHONIOENCODING")
 
@@ -85,7 +85,7 @@ class VerifyResult:
 
 def verify_fix(clone: Path, base: str, py: Path, test_args: list[str], timeout: int = 600,
                *, test_command: list[str] | None = None, check_commands: list[list[str]] | None = None,
-               failure_code: int = 1) -> VerifyResult:
+               failure_code: int = 1, isolation_mode: str = "none", readonly_paths: list[str] | None = None) -> VerifyResult:
     """The branch at HEAD holds fix + test. Revert only the non-test files to base, expect failure,
     restore, expect success, then lint the touched files."""
     r = VerifyResult()
@@ -105,6 +105,25 @@ def verify_fix(clone: Path, base: str, py: Path, test_args: list[str], timeout: 
         return r
     pytest = test_command if test_command is not None else [str(py), "-m", "pytest", "-q", "-x", *test_args]
 
+    # Validate before changing source state; requested containment never falls back.
+    def run_native(command, seconds):
+        try:
+            wrapped = isolation.wrap(command, clone, isolation_mode, [] if readonly_paths is None else readonly_paths)
+        except (isolation.Unavailable, OSError) as exc:
+            return 127, str(exc)
+        return _run(wrapped, clone, seconds)
+    try:
+        isolation.wrap(pytest, clone, isolation_mode, [] if readonly_paths is None else readonly_paths)
+    except (isolation.Unavailable, OSError) as exc:
+        r.log.append(str(exc))
+        return r
+
+    if isolation_mode != "none":
+        rc_probe, out_probe = run_native(['/usr/bin/true'], 10)
+        if rc_probe:
+            r.log.append(f"requested verification isolation unavailable rc={rc_probe}: {out_probe[-300:]}")
+            return r
+
     # Files the fix added do not exist at base: `git checkout base -- <them>` would fail for the whole batch and
     # silently leave the fix in place. Revert existing files from base; move new files aside and put them back.
     in_base = [f for f in r.fix_files if _run(["git", "cat-file", "-e", f"{base}:{f}"], clone)[0] == 0]
@@ -123,7 +142,7 @@ def verify_fix(clone: Path, base: str, py: Path, test_args: list[str], timeout: 
             if (clone / f).is_file() or (clone / f).is_symlink():
                 (clone / f).unlink()
         if reverted:
-            rc, out = _run(pytest, clone, timeout)
+            rc, out = run_native(pytest, timeout)
             r.failed_without_fix = rc == failure_code
             r.log.append(f"without fix rc={rc}: {out[-300:]}")
     finally:
@@ -134,7 +153,7 @@ def verify_fix(clone: Path, base: str, py: Path, test_args: list[str], timeout: 
             r.failed_without_fix = False
             r.log.append(f"could not restore committed fix; inspect worktree before retry: {out_restore[-200:]}")
 
-    rc, out = _run(pytest, clone, timeout)
+    rc, out = run_native(pytest, timeout)
     r.passed_with_fix = rc == 0
     r.log.append(f"with fix rc={rc}: {out[-300:]}")
 
@@ -143,13 +162,15 @@ def verify_fix(clone: Path, base: str, py: Path, test_args: list[str], timeout: 
     if test_command is None and pyfiles:
         checks.append([str(py), "-m", "ruff", "check", *pyfiles])
     for command in checks:
-        rc, out = _run(command, clone, 120)
+        rc, out = run_native(command, 120)
         r.lint_ok = r.lint_ok and rc == 0
         r.log.append(f"check {command[0]} rc={rc}: {out[-200:]}")
 
     if r.ok:
         try:
             r.evidence = evidence.capture(clone, base, [pytest, *checks])
+            r.evidence['verification_isolation'] = isolation_mode
+            r.evidence['readonly_paths'] = list([] if readonly_paths is None else readonly_paths)
             if any(initial[k] != r.evidence[k] for k in ("base", "tree", "branch")):
                 raise evidence.StaleEvidence("verification evidence: git state changed during tests; re-run verify")
         except evidence.StaleEvidence as e:
