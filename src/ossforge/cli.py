@@ -118,7 +118,7 @@ def build_parser() -> argparse.ArgumentParser:
     cl.add_argument("pr", type=int)
     add("patrol", "check our open PRs and say what each needs")
     add("digest", "write and print the daily digest")
-    lp = add("loop", "run the research loop", once={"action": "store_true"}, interval_hours={"type": positive_interval, "default": 6})
+    lp = add("loop", "run the research loop", prepare_only={"action": "store_true"}, once={"action": "store_true"}, interval_hours={"type": positive_interval, "default": 6})
     lp.set_defaults()
     add("doctor", "check git, gh, ruff and config before the first run")
     add("bootstrap", "import your merged/closed PR history to personalise scouting")
@@ -430,7 +430,11 @@ def main(argv: list[str] | None = None) -> int:
     elif a.cmd == "digest":
         print(digest.render(q, audit, patrol.patrol(audit, stats)))
     elif a.cmd == "loop":
-        if a.once:
+        if a.prepare_only:
+            # One bounded issue-to-task pass; never inherit executable hooks/effects.
+            loop.run_once(dataclasses.replace(cfg, auto_submit=False, patch_command=""),
+                          progress=lambda text: print(text, flush=True))
+        elif a.once:
             loop.run_once(cfg, progress=lambda text: print(text, flush=True))
         else:
             loop.run_forever(cfg, int(a.interval_hours * 3600))

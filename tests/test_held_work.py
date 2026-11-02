@@ -19,7 +19,7 @@ def test_hold_preserves_task_and_checkpoint_allows_independent_discovery(tmp_pat
     out = agent_next.next_step(cfg, q, str(cfgfile))
     assert out['status'] == 'held_work'
     assert out['held'][0]['id'] == 'a'
-    assert 'discover' in out['next_argv']
+    assert out['next_argv'][-3:] == ['loop', '--once', '--prepare-only']
     assert cli.main(['--config', str(cfgfile), 'unhold', 'a']) == 0
     assert Queue(q.path).items['a'].status == 'clean'
 

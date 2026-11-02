@@ -46,9 +46,14 @@ Do not start a nested model process just because you are already an AI assistant
 >   clear the record or switch accounts. This is not a clean no-find.
 > - review_incomplete_discovery: inspect the previous run journal. Resolve the
 >   stop reason before a bounded retry; partial reads are not absence of work.
-> - no_work: run the supplied bounded discovery command. Review its actual leads,
->   radar/acceptance/policy evidence and hunt promising targets; then agent-next
->   again. Discovery does not enqueue by itself. A no-find pass is not global
+> - held_work: keep held items paused until their prerequisites resolve. Follow
+>   the supplied bounded preparation step for independent work, then agent-next.
+>   Never unhold work merely to make the run succeed.
+> - no_work: run the supplied `loop --once --prepare-only` command. It disables
+>   patch hooks and publication, discovers/vets issues and clones approved leads
+>   into the task queue. Then run agent-next again. Read returned task evidence
+>   and reproduce it; approval is not bug proof. Explicit `discover` remains a
+>   read-only research command and does not enqueue by itself. A no-find pass is not global
 >   absence. Do not spin indefinitely: after two bounded passes without a useful
 >   new lead, report what was searched and the concrete next prerequisite.
 >
@@ -227,3 +232,21 @@ assistant. Mounts define what tests can read, and operator-selected runtime
 mounts must not contain private data. Do not mark issue27 complete from this
 feature alone. Real useful external coding, native verification and permitted
 upstream publication still need their own end-to-end evidence.
+
+### Bounded IDE handoff
+
+The already-running IDE assistant is the stage-loop executor, using its ordinary
+terminal and file tools. A separate provider adapter or nested model is not
+required. `agent-next` now supplies `loop --once --prepare-only` for empty, held
+or partial-read checkpoints. This executes at most one research pass and the
+existing approved-issue clone/handoff path. It forcibly disables `patch_command`
+and `auto_submit` for that invocation, even if the chosen config enables them.
+No background loop, driver command, code edit or publication starts implicitly.
+
+After the pass, run `agent-next`: a clean cloned lead returns `work_candidate`;
+no suitable lead remains a bounded no-find/held result; partial reads and
+cooldowns retain their stop/review state. Keep the same config/state. Review a
+partial-read prerequisite before following its retry argv. Use explicit `hunt`
+only when inspecting a policy-compatible target for new static findings. The
+controlled checkpoint-to-task tests are not proof of a real native IDE completing
+a useful upstream contribution.

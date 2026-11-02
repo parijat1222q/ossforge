@@ -57,7 +57,7 @@ def test_completed_url_not_republished_and_no_work_is_not_global_absence(tmp_pat
     item.submitted = {'pr': 'https://github.com/owner/repo/pull/2'}
     out = agent_next.next_step(cfg, q, 'c')
     assert out['status'] == 'no_work' and out['completed'][0]['saved_pr'] == item.submitted['pr']
-    assert out['next_argv'][-3:] == ['discover', '--strategy', 'rotate']
+    assert out['next_argv'][-3:] == ['loop', '--once', '--prepare-only']
 
 
 def test_clean_and_dirty_candidate_paths(tmp_path, monkeypatch):
@@ -123,7 +123,7 @@ def test_incomplete_discovery_is_not_clean_no_find(tmp_path):
     cfg.path('run.json').write_text(json.dumps({'status': 'discovery_budget_exhausted'}))
     out = agent_next.next_step(cfg, Queue(cfg.path('queue.json')), 'c.yaml')
     assert out['status'] == 'review_incomplete_discovery'
-    assert out['next_argv'][-1] == 'rotate'
+    assert out['next_argv'][-1] == '--prepare-only'
     assert 'partial' in out['reason']
 
 

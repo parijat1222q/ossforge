@@ -73,16 +73,16 @@ def next_step(cfg: Config, queue: Queue, config_path: str) -> dict:
         return result("inspect_local", reason="run journal unreadable; preserve it and inspect before discovery")
     if last.get("status") in ("discovery_budget_exhausted", "rate_limited", "interrupted", "failed", "running"):
         return result("review_incomplete_discovery", reason="previous run is partial or incomplete, not a clean no-find",
-                      prior_status=last["status"], next_argv=prefix + ["--json", "discover", "--strategy", "rotate"],
+                      prior_status=last["status"], next_argv=prefix + ["loop", "--once", "--prepare-only"],
                       warning="inspect the run journal; retry only after its prerequisite or cooldown is resolved")
     held = queue.by_status("held")
     if held:
         return result("held_work", reason="unresolved held work is excluded from coding selection, not rejected or verified",
                       held=[{"id": i.id, "repo": i.repo, "reason": i.hold_reason} for i in held],
-                      next_argv=prefix + ["--json", "discover", "--strategy", "rotate"],
+                      next_argv=prefix + ["loop", "--once", "--prepare-only"],
                       warning="independent discovery may continue; unhold only after its prerequisite is resolved")
     completed = [i for i in queue.items.values() if i.submitted.get("pr_url") or i.submitted.get("pr")]
     return result("no_work", reason="no locally actionable candidate; not proof that no opportunity exists",
                   completed=[{"id": i.id, "saved_pr": i.submitted.get("pr_url") or i.submitted.get("pr")} for i in completed],
-                  next_argv=prefix + ["--json", "discover", "--strategy", "rotate"],
-                  warning="discovery reads live GitHub state but does not clone or enqueue; review leads then hunt a policy-compatible target")
+                  next_argv=prefix + ["loop", "--once", "--prepare-only"],
+                  warning="bounded discovery can clone and enqueue approved issue leads, never patch or publish; leads still need current review/reproduction")
