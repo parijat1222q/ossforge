@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 
 
 @dataclass
@@ -66,5 +67,18 @@ def score_pr(s: PRSignals) -> PRPrediction:
 
 
 def is_test_path(path: str) -> bool:
-    p = path.lower()
-    return "test" in p.split("/")[-1] or "/tests/" in f"/{p}" or "/test/" in f"/{p}" or "spec" in p.split("/")[-1]
+    """Recognize test directories/naming boundaries, not production substrings.
+
+    A convention hint, not proof that a file contains tests. Native checks and
+    operator review still decide whether the regression is meaningful.
+    """
+    parts = path.replace("\\", "/").split("/")
+    markers = {"test", "tests", "spec", "specs", "__tests__"}
+    if any(part.lower() in markers for part in parts[:-1]):
+        return True
+    name = parts[-1]
+    if any(token in markers for token in re.split(r"[._-]", name.lower())):
+        return True
+    stem = name.rsplit(".", 1)[0]
+    return bool(re.search(r"(?:Test|Tests|Spec|Specs)$", stem)
+                or re.match(r"^(?:test|spec)[A-Z]", stem))
