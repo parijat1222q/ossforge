@@ -113,6 +113,7 @@ def test_requested_isolation_validation_precedes_source_revert(tmp_path, monkeyp
 
 
 def test_kernel_unavailable_stops_before_source_changes(tmp_path, monkeypatch):
+    monkeypatch.setattr(isolation.shutil, 'which', lambda *a: '/usr/bin/bwrap')
     monkeypatch.setattr(verify.evidence, 'capture', lambda *a: {'branch': 'fix'})
     monkeypatch.setattr(verify, 'changed_files', lambda *a: ['value.py', 'test_value.py'])
     calls = []
