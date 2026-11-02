@@ -11,7 +11,7 @@ import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-STATUSES = {"found", "clean", "duplicate", "verified", "submitted", "rejected", "anti_ai"}
+STATUSES = {"found", "clean", "duplicate", "verified", "submitted", "rejected", "anti_ai", "held"}
 
 
 @dataclass
@@ -36,6 +36,7 @@ class Item:
     submitted: dict = field(default_factory=dict)  # partial progress lives here (issue_url, fork_pushed, pr_url)
     work: str = "fix"  # fix | feature
     rank: float = 0.0
+    hold_reason: str = ""  # unresolved clean work, not a detector false positive
     snippet: str = ""  # a few lines around the finding so a human can accept or reject it quickly
 
 

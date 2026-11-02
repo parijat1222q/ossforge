@@ -75,6 +75,12 @@ def next_step(cfg: Config, queue: Queue, config_path: str) -> dict:
         return result("review_incomplete_discovery", reason="previous run is partial or incomplete, not a clean no-find",
                       prior_status=last["status"], next_argv=prefix + ["--json", "discover", "--strategy", "rotate"],
                       warning="inspect the run journal; retry only after its prerequisite or cooldown is resolved")
+    held = queue.by_status("held")
+    if held:
+        return result("held_work", reason="unresolved held work is excluded from coding selection, not rejected or verified",
+                      held=[{"id": i.id, "repo": i.repo, "reason": i.hold_reason} for i in held],
+                      next_argv=prefix + ["--json", "discover", "--strategy", "rotate"],
+                      warning="independent discovery may continue; unhold only after its prerequisite is resolved")
     completed = [i for i in queue.items.values() if i.submitted.get("pr_url") or i.submitted.get("pr")]
     return result("no_work", reason="no locally actionable candidate; not proof that no opportunity exists",
                   completed=[{"id": i.id, "saved_pr": i.submitted.get("pr_url") or i.submitted.get("pr")} for i in completed],

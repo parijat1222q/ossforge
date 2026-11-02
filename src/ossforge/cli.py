@@ -105,6 +105,9 @@ def build_parser() -> argparse.ArgumentParser:
     vf.add_argument("--pr-title", required=True)
     vf.add_argument("--pr-body-file", required=True)
     vf.add_argument("--install", nargs="*", default=["."], help="paths to pip install -e in the venv")
+    hd = add("hold", "pause an unverified clean candidate without marking it false", "id")
+    hd.add_argument("--reason", required=True)
+    add("unhold", "explicitly return held work to clean, never verified", "id")
     rj = add("reject", "mark an item as a false positive (feeds detector precision)", "id")
     rj.add_argument("--reason", default="")
     sm = add("submit", "file issue + PR together (dry run unless --yes)", "id")
@@ -325,12 +328,17 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         for i in sorted(q.items.values(), key=lambda i: -i.rank):
             print(f"[{i.status:9}] {i.rank:.2f} {i.id}  {i.detail}")
+            if i.status == "held":
+                print("              held:", i.hold_reason)
             for n in i.notes:
                 print("              ", n)
             if i.snippet and i.status == "clean":
                 print("\n".join("              | " + ln for ln in i.snippet.splitlines()))
     elif a.cmd == "verify":
         it = q.items[a.id]
+        if it.status == "held":
+            print("REFUSED: held work must be explicitly unheld after resolving its prerequisite", file=sys.stderr)
+            return 1
         clone = Path(it.clone)
         if not a.tests and not a.test_command:
             print("verify requires --tests or --test-command", file=sys.stderr)
@@ -365,6 +373,16 @@ def main(argv: list[str] | None = None) -> int:
               pr_body=Path(a.pr_body_file).read_text(encoding="utf-8"), verification=r.evidence, consent_issue=a.consent_issue)
         q.save()
         print("verified:", a.id)
+    elif a.cmd in ("hold", "unhold"):
+        it = q.items.get(a.id)
+        expected = "clean" if a.cmd == "hold" else "held"
+        if not it or it.status != expected or it.submitted or (a.cmd == "hold" and not a.reason.strip()):
+            print(f"REFUSED: {a.cmd} requires {expected} work without publication progress and a nonempty hold reason", file=sys.stderr)
+            return 1
+        q.set(a.id, status="held" if a.cmd == "hold" else "clean",
+              hold_reason=a.reason.strip() if a.cmd == "hold" else "")
+        q.save()
+        print(f"{a.cmd}: {a.id}")
     elif a.cmd == "reject":
         it = q.set(a.id, status="rejected", notes=[a.reason] if a.reason else [])
         stats.record_kind(it.kind, False)
