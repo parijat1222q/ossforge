@@ -102,18 +102,24 @@ def _pass(cfg: Config, q: Queue, audit: safety.Audit, stats: Stats, limiter: Dai
     notes.append(f"scout: {len(repos)} healthy, open-to-AI repo(s) with approved issues")
 
     for repo in repos[:MAX_REPOS_PER_PASS]:
-        notes.append(f"hunt {repo}: starting")
-        r = hunt.hunt(cfg, repo, q, stats)
-        notes.append(f"hunt {repo}: " + (f"skipped (anti-AI in {r['anti_ai']})" if r["anti_ai"]
-                                         else f"{r['clean']} clean, {r['duplicate']} duplicate"))
-        if not r["anti_ai"]:
+        # A vetted issue is already a work lead. Do not block its handoff on an
+        # unrelated full-tree static hunt and its separate duplicate searches.
+        try:
             clone = hunt.clone(cfg, repo)
-            for c in (item for item in issues if item.repo == repo):
-                # Search/vet approval is only a work lead, not verified correctness.
-                q.add(Item(f"{c.repo}#{c.number}:issue", c.repo, "", c.number, "issue", c.title,
-                           status="clean", clone=str(clone), work="fix", rank=c.score,
-                           notes=[c.url], source_issue=c.number))
-            q.save()
+            pol = hunt.policy_of(clone)
+        except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+            notes.append(f"issue work {repo}: checkout unavailable; inspect before retry ({exc})")
+            continue
+        if pol.anti_ai:
+            notes.append(f"issue work {repo}: skipped (anti-AI in {pol.source})")
+            continue
+        for c in (item for item in issues if item.repo == repo):
+            # Search/vet approval is only a work lead, not verified correctness.
+            q.add(Item(f"{c.repo}#{c.number}:issue", c.repo, "", c.number, "issue", c.title,
+                       status="clean", clone=str(clone), work="fix", rank=c.score,
+                       notes=[c.url], source_issue=c.number))
+        q.save()  # preserve each successful handoff before the next clone
+        notes.append(f"issue work {repo}: handed off to driver; source issues must be rechecked before coding")
     for c in feats[:3]:
         clone = hunt.clone(cfg, c.repo)
         pol = hunt.policy_of(clone)

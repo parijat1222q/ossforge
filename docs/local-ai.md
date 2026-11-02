@@ -155,3 +155,11 @@ position starts a fresh search, not a positive vetting decision. The local
 checkpoint is not a tamper-resistant security boundary, and this does not save
 partial progress inside one expensive issue's vetting. An issue that cannot fit
 the read budget may still need a deliberately larger bounded budget or review.
+
+The contribution loop hands an approved existing issue to the driver after clone
+and local policy checks. It does not require an unrelated full-repository static
+hunt first. Run `hunt` explicitly when looking for new static candidates. Issue
+handoff preserves the source issue ID; it is not bug proof or permission to code
+without current active-work review. Checkout failures preserve local content and
+allow other approved repositories to continue. Clone/policy/handoff are outside
+the discovery read budget; this remains a read-phase limit, not a whole-run limit.
