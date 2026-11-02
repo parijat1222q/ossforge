@@ -135,6 +135,16 @@ def commit(cfg: Config, cwd: str, message: str, paths: list[str] | None = None) 
     selected = list(dict.fromkeys(p for p in listed.stdout.split("\0") if p))
     if not selected:
         raise IdentityError("no non-artifact source paths to stage")
+    # git commit includes the entire index, not only paths just added below.
+    # Refuse unrelated pre-staged work before changing the index; never unstage
+    # or silently absorb changes outside the requested source selection.
+    index = subprocess.run(["git", "diff", "--cached", "--name-only", "-z"],
+                           cwd=cwd, capture_output=True, text=True)
+    if index.returncode:
+        raise IdentityError("could not inspect staged paths; index preserved")
+    extra = set(index.stdout.split("\0")) - {"", *selected}
+    if extra:
+        raise IdentityError("unrelated staged paths outside commit selection; preserve/review the index before retry")
     # Explicit files avoid git add's ignored-directory error for excluded build trees.
     staged = subprocess.run(["git", "--literal-pathspecs", "add", "-A", "--", *selected],
                             cwd=cwd, capture_output=True, text=True)
