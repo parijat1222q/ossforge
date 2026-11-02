@@ -11,7 +11,11 @@ from .config import Config
 from .outcomes import Stats
 
 FEATURE_LABELS = ["enhancement", "feature request", "feature"]
-_MONEY = re.compile(r"(\$\s?\d|\b\d[\d,]*\s?(eth|usdt|usdc|rtc|btc|sol)\b)", re.I)
+_CRYPTO_AMOUNT = re.compile(r"\b\d[\d,]*(?:\.\d+)?\s?(?:eth|usdt|usdc|rtc|btc|sol)\b", re.I)
+_DOLLAR_AMOUNT = re.compile(r"\$\s?\d")
+_PAYMENT = re.compile(r"\b(?:pay(?:s|ing|ment)?|paid|bount(?:y|ies)|reward|prize|usd|us\$|dollars?|cash|compensation)\b", re.I)
+_CODE_DOLLAR = re.compile(r"\b(?:shell|bash|zsh|awk|positional|backreference|replacement|replace group)\b", re.I)
+_MATH_DOLLAR = re.compile(r"(?<!\$)\$[^$\n]+\$(?!\$)")
 
 
 @dataclass
@@ -31,7 +35,22 @@ class Candidate:
 
 def is_spam(title: str, body: str, keywords: list[str]) -> bool:
     hay = f"{title}\n{(body or '')[:600]}".lower()
-    return bool(_MONEY.search(hay)) or any(k in hay for k in keywords)
+    # Match configured literal terms, not substrings of identifiers (tokenize,
+    # csrf_token, WebRTC). Punctuation in custom terms remains literal.
+    if any(k and re.search(r"(?<!\w)" + re.escape(k.lower()) + r"(?!\w)", hay)
+           for k in keywords):
+        return True
+    if _CRYPTO_AMOUNT.search(hay):
+        return True
+    if not _DOLLAR_AMOUNT.search(hay):
+        return False
+    # Monetary context wins even inside backticks or dollar-delimited text.
+    if _PAYMENT.search(hay) or re.search(r"\bus\$\s?\d", hay):
+        return True
+    # Explicit code context disambiguates positional fields of any length.
+    # Otherwise only paired inline math is removed; bare amounts stay blocked.
+    dollars = "" if _CODE_DOLLAR.search(hay) else _MATH_DOLLAR.sub("", hay)
+    return bool(_DOLLAR_AMOUNT.search(dollars))
 
 
 def score_issue(it: dict, repo_score: int, now: datetime | None = None) -> tuple[float, list[str]]:
