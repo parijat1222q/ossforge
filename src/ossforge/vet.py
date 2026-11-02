@@ -126,7 +126,14 @@ def vet_issue(repo: str, number: int, repo_ok: bool = True) -> Verdict:
     if resolved:
         return Verdict(f"{repo}#{number}", "skip", [resolved])
     claimed = any(comment_claims_issue(c.get("body", "")) for c in comments)
-    prs = gh.search_issues(f"repo:{repo} is:pr is:open #{number} in:body,title", per_page=10)
+    try:
+        prs = gh.search_issues(f"repo:{repo} is:pr #{number} in:body,title", per_page=100, require_complete=True)
+    except gh.RateLimited:
+        raise
+    except gh.GhError as exc:
+        return Verdict(f"{repo}#{number}", "skip", [f"referenced PR coverage unavailable; review activity before coding: {exc}"])
+    if any(pr.get("state") != "open" for pr in prs):
+        return Verdict(f"{repo}#{number}", "skip", ["closed or merged PR reference requires review of implementation and current source before coding"])
     files = policy_texts(repo)
     pol = policy.scan_files(files)
     code, reasons = decide(
