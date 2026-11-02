@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 from .config import Config
+from . import policy
 
 PROTECTED_GLOBS = (
     ".github/workflows/*", ".github/CODEOWNERS", "CODEOWNERS", "LICENSE*", "COPYING*", "SECURITY.md",
@@ -43,7 +44,11 @@ def kill_switch(cfg: Config) -> None:
 
 
 def protected(path: str) -> bool:
-    return any(fnmatch.fnmatch(path, g) for g in PROTECTED_GLOBS)
+    # Protect the governance documents we actually read at contribution time.
+    # README files and PR templates remain editable ordinary documentation.
+    policy_paths = (p for p in policy.POLICY_FILES
+                    if "README" not in p and "PULL_REQUEST_TEMPLATE" not in p.upper())
+    return any(fnmatch.fnmatch(path, g) for g in (*PROTECTED_GLOBS, *policy_paths))
 
 
 def check_diff(changed_files: list[str], diff_text: str) -> list[str]:
