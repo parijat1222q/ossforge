@@ -27,6 +27,8 @@ GH_SHIM = textwrap.dedent('''\
             reply(200, {"login": os.environ["FAKE_GH_LOGIN"]})
         if path == "search/issues":
             reply(200, {"total_count": 0, "items": []})
+        if path == "repos/acme/lib":
+            reply(200, {"pull_request_creation_policy": "all"})
         if path == "repos/acme/lib/contents":
             reply(200, [])
         if path == "repos/acme/lib/issues/11":
@@ -677,3 +679,42 @@ def test_pr_only_resume_checks_exactly_at_preflight_and_pr_effect(world, new_com
         assert out['pr'] == 'https://github.com/acme/lib/pull/12'
         assert [w[:2] for w in writes(world['log'])] == [['pr', 'create']]
     assert len(seen) == 2
+
+
+@pytest.mark.parametrize('mode', ['restricted', 'changed', 'unavailable'])
+def test_repository_pr_access_rechecked_before_effects(world, mode):
+    original = gh.api
+    reads = []
+    def api(endpoint, **kw):
+        if endpoint == 'repos/acme/lib':
+            reads.append(1)
+            if mode == 'unavailable':
+                raise gh.GhError('unavailable')
+            if mode == 'restricted' or len(reads) > 1:
+                return {'pull_request_creation_policy': 'collaborators_only', 'permissions': {'push': False}}
+            return {'pull_request_creation_policy': 'all'}
+        return original(endpoint, **kw)
+    world['mp'].setattr(gh, 'api', api)
+    with pytest.raises(submit.Refused, match='PR|collaborator'):
+        run(world, execute=True)
+    assert writes(world['log']) == []
+
+
+def test_repository_policy_change_before_pr_preserves_progress_without_pr(world):
+    original = gh.api
+    reads = []
+    def api(endpoint, **kw):
+        if endpoint == 'repos/acme/lib':
+            reads.append(1)
+            if len(reads) >= 4:
+                return {'pull_request_creation_policy': 'collaborators_only', 'permissions': {'push': False}}
+            return {'pull_request_creation_policy': 'all'}
+        return original(endpoint, **kw)
+    world['mp'].setattr(gh, 'api', api)
+    with pytest.raises(submit.Refused, match='collaborators only'):
+        run(world, execute=True)
+    observed = writes(world['log'])
+    assert any(w[:2] == ['issue', 'create'] for w in observed)
+    assert not any(w[:2] == ['pr', 'create'] for w in observed)
+    assert world['it'].submitted.get('issue_url')
+    assert world['it'].submitted.get('fork_pushed')

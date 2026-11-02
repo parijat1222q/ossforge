@@ -12,7 +12,7 @@ import fcntl
 from collections.abc import Callable
 from pathlib import Path
 
-from . import duplicate_reviews, admission, evidence, contributing, dedupe, gh, identity, policy, policy_review, review, safety, vet, predictor
+from . import repo_access, duplicate_reviews, admission, evidence, contributing, dedupe, gh, identity, policy, policy_review, review, safety, vet, predictor
 from .config import Config
 from .limiter import DailyLimiter
 from .queue import Item
@@ -45,6 +45,17 @@ def _identity_gate(cfg: Config, cwd: str, base: str, repo: str, fork: bool) -> N
         identity.require(problems)
     except identity.IdentityError as e:
         raise Refused(str(e)) from e
+
+
+def _repo_access_gate(it: Item) -> None:
+    if it.submitted.get("pr_url") or it.submitted.get("pr"):
+        return
+    try:
+        reason = repo_access.pr_restriction(it.repo)
+    except gh.GhError as exc:
+        raise Refused(f"PR creation access unavailable: {exc}") from exc
+    if reason:
+        raise Refused(reason)
 
 
 def _upstream_gate(it: Item) -> None:
@@ -197,6 +208,7 @@ def preflight(it: Item, limiter: DailyLimiter, cfg: Config, history: list[dict])
     why = safety.repo_allowed(cfg, it.repo, history)
     if why and not it.submitted.get("issue_url"):
         raise Refused(why)
+    _repo_access_gate(it)
     _upstream_gate(it)
     _source_work_gate(it)
     files = _policy_files(it.repo)
@@ -296,6 +308,7 @@ def _submit(it: Item, limiter: DailyLimiter, cfg: Config, audit: safety.Audit, e
     _admission_gate(it, cfg)  # current upstream consent, never cached
     # A PR-only resume makes no issue/fork write here. Keep its fresh checks at
     # the PR write boundary below, instead of repeating a no-effect checkpoint.
+    _repo_access_gate(it)
     if not (prog.get("issue_url") and prog.get("fork_pushed")):
         _upstream_gate(it)
         _source_work_gate(it)
@@ -322,6 +335,7 @@ def _submit(it: Item, limiter: DailyLimiter, cfg: Config, audit: safety.Audit, e
     num = prog["issue_url"].rsplit("/", 1)[-1]
 
     if not prog.get("fork_pushed"):
+        _repo_access_gate(it)
         gh.pace_write()
         subprocess.run(["gh", "repo", "fork", it.repo, "--clone=false"], capture_output=True)
         fork = f"https://github.com/{me}/{it.repo.split('/')[1]}.git"
@@ -336,6 +350,7 @@ def _submit(it: Item, limiter: DailyLimiter, cfg: Config, audit: safety.Audit, e
         progress(fork_pushed=True)
 
     if not prog.get("pr_url"):
+        _repo_access_gate(it)
         if limiter.remaining() <= 0:
             raise Refused("daily PR cap reached; existing issue/fork progress retained for a later day")
         _upstream_gate(it)

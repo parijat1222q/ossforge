@@ -8,17 +8,19 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from . import contributing, gh, policy
+from . import contributing, gh, policy, repo_access
 
 CLAIM_RE = re.compile(
     r"(i'?m (working|taking)|i'?ll (take|work|do|fix|submit)|working on (this|it)|"
-    r"can i (take|work|have)|assign (this )?to me|claiming|i'?ve started)",
+    r"can i (take|work|have)|assign (this )?to me|claiming|i'?ve started|"
+    r"i(?: have|'ve) (?:a |the )?(?:working )?(?:fix|patch|solution) (?:ready|on my fork)|"
+    r"i(?: would|'d) like to work on|i (?:have|posted|pushed) a (?:working )?fix on my fork)",
     re.I,
 )
 
 
 def comment_claims_issue(body: str) -> bool:
-    return bool(CLAIM_RE.search(body or ""))
+    return bool(CLAIM_RE.search((body or "").replace("’", "'")))
 
 
 def clear_requirements(body: str) -> bool:
@@ -84,6 +86,12 @@ def policy_texts(repo: str, *, fresh: bool = False) -> dict[str, str]:
 
 
 def vet_issue(repo: str, number: int, repo_ok: bool = True) -> Verdict:
+    try:
+        restricted = repo_access.pr_restriction(repo)
+    except gh.GhError as exc:
+        return Verdict(f"{repo}#{number}", "skip", [f"PR creation access unavailable: {exc}"])
+    if restricted:
+        return Verdict(f"{repo}#{number}", "skip", [restricted])
     issue = gh.api(f"repos/{repo}/issues/{number}")
     comments = gh.api(f"repos/{repo}/issues/{number}/comments") or []
     claimed = any(comment_claims_issue(c.get("body", "")) for c in comments)

@@ -66,3 +66,34 @@ def test_strict_policy_listing_rejects_malformed_or_saturated_result(monkeypatch
         monkeypatch.setattr(gh, 'api', lambda *a, result=result, **k: result)
         with pytest.raises(gh.GhError):
             gh.existing_files('owner/repo', ('README.md',), fresh=True, strict=True)
+
+
+def test_existing_fork_fix_and_work_claims_are_not_unclaimed():
+    for body in ["I have a fix ready for this on my fork", "I'd like to work on improving this",
+                 "I have a working fix on my fork", "I’d like to work on this", "I've a patch ready"]:
+        assert vet.comment_claims_issue(body), body
+    assert not vet.comment_claims_issue('Does anyone have a fix ready?')
+
+
+def test_collaborator_only_target_stops_vet_before_issue_work(monkeypatch):
+    from ossforge import gh
+    seen = []
+    def api(endpoint, **kw):
+        seen.append(endpoint)
+        assert endpoint == 'repos/owner/repo'
+        return {'pull_request_creation_policy': 'collaborators_only', 'permissions': {'push': False}}
+    monkeypatch.setattr(gh, 'api', api)
+    out = vet.vet_issue('owner/repo', 993)
+    assert out.decision == 'skip' and 'collaborators only' in out.reasons[0]
+    assert seen == ['repos/owner/repo']
+
+
+def test_repository_pr_access_compatibility_and_unknowns(monkeypatch):
+    from ossforge import gh, repo_access
+    for info, blocked in [({}, False), ({'pull_request_creation_policy': 'all'}, False),
+                           ({'pull_request_creation_policy': 'collaborators_only', 'permissions': {'push': True}}, False),
+                           ({'pull_request_creation_policy': 'collaborators_only'}, True),
+                           ({'pull_request_creation_policy': 'new_mode'}, True),
+                           ({'pull_request_creation_policy': 'collaborators_only', 'permissions': []}, True)]:
+        monkeypatch.setattr(gh, 'api', lambda *a, info=info, **k: info)
+        assert bool(repo_access.pr_restriction('owner/repo')) is blocked
