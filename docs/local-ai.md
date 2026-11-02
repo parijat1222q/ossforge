@@ -163,3 +163,11 @@ handoff preserves the source issue ID; it is not bug proof or permission to code
 without current active-work review. Checkout failures preserve local content and
 allow other approved repositories to continue. Clone/policy/handoff are outside
 the discovery read budget; this remains a read-phase limit, not a whole-run limit.
+
+For a bug-fix-only contribution goal, set `work_kind: fix` in the chosen config.
+The loop then searches the configured issue labels without spending alternate-day
+reads on feature proposals. The default `both` retains the previous behavior.
+Only `fix` and `both` are supported; unknown values stop before remote work.
+This selects discovery work, not eligibility: normal policy, claims, duplicate,
+verification and publication gates remain. A completed fix-only no-find is still
+not proof that no useful bug exists.

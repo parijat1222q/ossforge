@@ -65,6 +65,8 @@ def _run_once(cfg: Config, run) -> list[str]:
 
 def _pass(cfg: Config, q: Queue, audit: safety.Audit, stats: Stats, limiter: DailyLimiter, notes: list[str],
           actions: list[patrol.Action]) -> None:
+    if cfg.work_kind not in {"fix", "both"}:
+        raise ValueError("work_kind must be fix or both")
     notes.append("patrol: checking existing contributions")
     actions.extend(patrol.patrol(audit, stats))
     notes.append(f"patrol: {sum(a.kind not in ('idle',) for a in actions)} open item(s) need attention")
@@ -91,7 +93,7 @@ def _pass(cfg: Config, q: Queue, audit: safety.Audit, stats: Stats, limiter: Dai
                 notes.append("discovery funnel: " + scout.explain_funnel(scout.LAST_FUNNEL))
                 if scout.LAST_FUNNEL.get("stopped"):
                     raise gh.ReadBudgetExceeded(str(scout.LAST_FUNNEL["stopped"]))
-                if day % 2:
+                if cfg.work_kind == "both" and day % 2:
                     feats += [c for c in scout.scout_features(cfg, stats, lang, 8, blocked) if c.verdict.decision == "approve"]
                     notes.append("feature funnel: " + scout.explain_funnel(scout.LAST_FUNNEL))
                     if scout.LAST_FUNNEL.get("stopped"):

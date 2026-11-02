@@ -6,6 +6,7 @@ disclosure: auto          # auto = add the AI-assistance note only where the rep
 github_user: ""           # REQUIRED to publish: must equal the gh login (`gh auth status`)
 git_name: ""              # REQUIRED to publish: expected commit author AND committer name
 git_email: ""             # REQUIRED to publish: expected commit author AND committer email
+work_kind: both          # fix = no alternate-day feature searches; both preserves existing behavior
 min_repo_score: 60
 min_stars: 500
 languages: [python]

@@ -19,6 +19,7 @@ class Config:
     git_name: str = ""                # expected commit author/committer name; publishing stops if it differs
     git_email: str = ""               # expected commit author/committer email
     disclosure: bool | str = "auto"   # true | false | "auto": add the AI-assistance note only where the repo asks for it
+    work_kind: str = "both"  # both | fix: fix-only runs do not search feature proposals
     min_repo_score: int = 60
     min_stars: int = 500
     languages: list[str] = field(default_factory=lambda: ["python"])
