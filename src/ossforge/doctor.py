@@ -21,8 +21,10 @@ def _out(cmd: list[str]) -> tuple[int, str]:
 def check(cfg: Config) -> list[tuple[str, bool, str]]:
     res: list[tuple[str, bool, str]] = []
     res.append(("python >= 3.10", sys.version_info >= (3, 10), sys.version.split()[0]))
-    for tool in ("git", "gh", "ruff"):
+    for tool in ("git", "gh"):
         res.append((f"{tool} on PATH", shutil.which(tool) is not None, shutil.which(tool) or "missing"))
+    rc, out = _out([sys.executable, "-m", "ruff", "--version"])
+    res.append(("ruff via current Python", rc == 0, out or "missing from current Python; install ossforge dev dependencies"))
     if shutil.which("gh"):
         rc, out = _out(["gh", "auth", "status"])
         res.append(("gh logged in", rc == 0, out.splitlines()[0] if out else ""))
