@@ -134,6 +134,10 @@ def scan_tree(root: Path, max_files: int = 2000) -> list[Finding]:
     out: list[Finding] = []
     n = 0
     for p in root.rglob("*.py"):
+        # Findings must describe regular source files in this checkout, never
+        # dereference aliases into unrelated files (or open FIFOs/devices).
+        if p.is_symlink() or not p.is_file() or not p.resolve().is_relative_to(root.resolve()):
+            continue
         parts = set(p.relative_to(root).parts)
         if parts & SKIP_DIRS or any(x in {"tests", "test", "docs", "examples"} for x in parts):
             continue

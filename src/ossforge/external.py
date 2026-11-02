@@ -48,6 +48,10 @@ def js_findings(root: Path, max_files: int = 2000) -> list[Finding]:
     out: list[Finding] = []
     n = 0
     for p in root.rglob("*"):
+        # Findings must describe regular source files in this checkout, never
+        # dereference aliases into unrelated files (or open FIFOs/devices).
+        if p.is_symlink() or not p.is_file() or not p.resolve().is_relative_to(root.resolve()):
+            continue
         if p.suffix not in JS_EXT:
             continue
         try:
