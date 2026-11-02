@@ -41,8 +41,9 @@ def clone(cfg: Config, repo: str) -> Path:
 
 
 def policy_of(dest: Path) -> policy.PolicyResult:
-    files = {p: (dest / p).read_text(encoding="utf-8", errors="replace")
-             for p in policy.POLICY_FILES if (dest / p).is_file()}
+    files = {p.relative_to(dest).as_posix(): p.read_text(encoding="utf-8", errors="replace")
+             for pattern in policy.POLICY_FILES for p in dest.glob(pattern)
+             if p.is_file() and not p.is_symlink() and p.resolve().is_relative_to(dest.resolve())}
     return policy.scan_files(files)
 
 

@@ -91,3 +91,47 @@ def test_review_snapshot_refuses_unreadable_listed_document(monkeypatch):
     monkeypatch.setattr(policy_review.gh, 'api', lambda *a, **kw: {'encoding': 'none'})
     with pytest.raises(policy_review.gh.GhError, match='could not be read'):
         policy_review.snapshot('local/fixture')
+
+
+def test_singular_doc_and_named_pr_templates_gate_local_hunt(tmp_path):
+    from ossforge import hunt
+    for name in ('doc/CONTRIBUTING.md', '.github/PULL_REQUEST_TEMPLATE/bug_fix.md'):
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('No AI-assisted contributions.')
+        result = hunt.policy_of(tmp_path)
+        assert result.anti_ai and result.source == name
+        path.unlink()
+
+
+def test_named_templates_apply_disclosure_and_snapshot(monkeypatch):
+    import base64
+    from ossforge import gh, policy_review, vet
+    name = '.github/PULL_REQUEST_TEMPLATE/bug_fix.md'
+    seen = []
+    def api(endpoint, **kw):
+        seen.append((endpoint, kw))
+        if endpoint.endswith('/contents/' + name):
+            return {'encoding': 'base64', 'content': base64.b64encode(b'You must disclose AI assistance.').decode(),
+                    'sha': 'named-sha', 'html_url': 'https://github.com/local/fixture'}
+        if endpoint.endswith('/contents/.github/PULL_REQUEST_TEMPLATE'):
+            return [{'path': name, 'type': 'file'}, {'path': '.github/PULL_REQUEST_TEMPLATE/subdir', 'type': 'dir'}]
+        return []
+    monkeypatch.setattr(gh, 'api', api)
+    texts = vet.policy_texts('local/fixture', fresh=True)
+    assert policy.classify_disclosure(texts).status == 'mandatory'
+    snap = policy_review.snapshot('local/fixture')
+    assert snap['docs'][0]['path'] == name and snap['docs'][0]['sha'] == 'named-sha'
+    assert all(kw.get('fresh') for _, kw in seen)
+
+
+def test_named_template_listing_failure_is_not_no_policy(monkeypatch):
+    import pytest
+    from ossforge import gh, vet
+    def api(endpoint, **kw):
+        if endpoint.endswith('/contents/.github/PULL_REQUEST_TEMPLATE'):
+            raise gh.GhError('service unavailable', 503)
+        return []
+    monkeypatch.setattr(gh, 'api', api)
+    with pytest.raises(gh.GhError):
+        vet.policy_texts('local/fixture', fresh=True)

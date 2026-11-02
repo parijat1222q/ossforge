@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import fcntl
+import fnmatch
 import hashlib
 import json
 import math
@@ -332,7 +333,7 @@ def existing_files(repo: str, paths: tuple[str, ...], *, fresh: bool = False, st
             raise GhError("policy directory listing unavailable")
         if isinstance(listing, list):
             present.update(x["path"] for x in listing if x.get("type") == "file")
-    return [p for p in paths if p in present]
+    return sorted(p for p in present if any(fnmatch.fnmatchcase(p, pattern) for pattern in paths))
 
 
 _MISSING: set[tuple[str, str, str | None]] = set()

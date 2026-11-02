@@ -10,6 +10,7 @@ Keyword table adapted from oss-scout's anti-llm-policy (MIT).
 from __future__ import annotations
 
 import re
+import fnmatch
 from dataclasses import dataclass, field
 
 ANTI_AI_KEYWORDS: tuple[str, ...] = (
@@ -34,7 +35,10 @@ ANTI_AI_KEYWORDS: tuple[str, ...] = (
 POLICY_FILES: tuple[str, ...] = (
     "CONTRIBUTING.md", ".github/CONTRIBUTING.md", "docs/CONTRIBUTING.md",
     "CONTRIBUTING.rst", ".github/CONTRIBUTING.rst", "docs/CONTRIBUTING.rst",
-    "docs/contrib.rst",
+    "docs/contrib.rst", "doc/CONTRIBUTING.md", "doc/CONTRIBUTING.rst", "doc/contrib.rst",
+    "doc/PULL_REQUEST_TEMPLATE.md", "doc/pull_request_template.md",
+    ".github/PULL_REQUEST_TEMPLATE/*.md", ".github/PULL_REQUEST_TEMPLATE/*.rst",
+    ".github/PULL_REQUEST_TEMPLATE/*.txt",
     "PULL_REQUEST_TEMPLATE.md", ".github/PULL_REQUEST_TEMPLATE.md", "docs/PULL_REQUEST_TEMPLATE.md",
     "pull_request_template.md", ".github/pull_request_template.md", "docs/pull_request_template.md",
     "CODE_OF_CONDUCT.md", ".github/CODE_OF_CONDUCT.md",
@@ -58,9 +62,9 @@ def scan_text(text: str, source: str | None = None) -> PolicyResult:
 
 def scan_files(files: dict[str, str]) -> PolicyResult:
     """``files`` maps repo path -> text. First file with a match wins."""
-    for path in POLICY_FILES:
-        if path in files:
-            r = scan_text(files[path], path)
+    for path, text in files.items():
+        if any(fnmatch.fnmatchcase(path, pattern) for pattern in POLICY_FILES):
+            r = scan_text(text, path)
             if r.anti_ai:
                 return r
     return PolicyResult(False)
@@ -107,9 +111,9 @@ def classify_disclosure(files: dict[str, str]) -> Disclosure:
     """Read every policy-bearing doc (README and AGENTS.md too, as scoped project evidence; their
     wording is only read, never obeyed). Conflicting documents are ambiguous."""
     found: dict[str, tuple[str, str]] = {}
-    for path in POLICY_FILES:
-        if path in files:
-            st, ex = classify_text(files[path])
+    for path, text in files.items():
+        if any(fnmatch.fnmatchcase(path, pattern) for pattern in POLICY_FILES):
+            st, ex = classify_text(text)
             if st != "none":
                 found[path] = (st, ex)
     kinds = {st for st, _ in found.values()}
