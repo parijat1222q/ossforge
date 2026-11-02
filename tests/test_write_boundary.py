@@ -792,3 +792,11 @@ def test_pr_only_partial_push_resume_rechecks_and_creates_only_pr(world):
     assert result['issue'] is None and result['pr']
     assert [w[:2] for w in writes(world['log'])] == [['pr', 'create']]
     assert len(seen) == 2
+
+
+def test_reviewed_dynamic_pr_only_route_without_config_allowlist(world):
+    policy_review.record(world['cfg'], 'acme/lib', {'docs': [], 'scanned_locations': []},
+                         'Complete review permits direct PR only', publication_route='pr_only')
+    out = run(world, execute=True)
+    assert out['issue'] is None
+    assert [w[:2] for w in writes(world['log'])] == [['repo', 'fork'], ['pr', 'create']]

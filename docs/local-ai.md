@@ -17,6 +17,15 @@ Do not start a nested model process just because you are already an AI assistant
 > doctor and whoami. Do not change identity, authentication or a STOP marker to
 > make progress. Ask only for an unresolved prerequisite or approval.
 >
+> Before publication, read the current contribution rules and linked guides.
+> Record the source-backed publication route with `policy-review --accept
+> --publication-route ROUTE --note ...`; pin linked in-repository guides using
+> `--extra-path`. Use `issue_pr` when complete review finds no specific rule,
+> `pr_only` when a direct PR is the appropriate route, `issue_first` while
+> discussion or feedback prerequisites remain, and `unresolved` for unread,
+> unclear or conflicting sources. No specific rule means the normal default,
+> not hold. A rule change requires rereading, not changing the owner's authority.
+>
 > Run `ossforge --config ossforge.yaml agent-next` after startup and each step.
 > Follow its structured checkpoint:
 > - stopped: preserve state and wait for the owner, never clear STOP yourself.

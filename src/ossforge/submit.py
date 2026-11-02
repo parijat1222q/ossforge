@@ -195,8 +195,15 @@ def _duplicate_gate(it: Item, cfg: Config | None = None) -> None:
 
 
 def _publication_mode(it: Item, cfg: Config) -> str:
+    try:
+        reviewed = policy_review.publication_route(cfg, it.repo)
+    except (ValueError, gh.GhError) as exc:
+        raise Refused(str(exc)) from exc
+    configured = it.repo.lower() in {r.lower() for r in cfg.pr_only_repos}
+    if configured and reviewed not in (None, "pr_only"):
+        raise Refused("configured PR-only route conflicts with current policy review")
     # Existing source issues remain linked; PR-only means no NEW issue.
-    mode = "pr_only" if not it.source_issue and it.repo.lower() in {r.lower() for r in cfg.pr_only_repos} else "issue_pr"
+    mode = "pr_only" if not it.source_issue and (reviewed == "pr_only" or configured) else "issue_pr"
     saved_mode = it.submitted.get("publication_mode")
     if saved_mode is not None and saved_mode != mode:
         raise Refused("publication mode changed after saved progress; reconcile before retry")

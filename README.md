@@ -506,3 +506,29 @@ Changing the mode after progress, or hiding a saved issue under PR-only mode,
 stops for reconciliation. Identity, current upstream, policy review, duplicates,
 exact-tree verification and submission limits remain checked. Reconcile unknown
 remote outcomes instead of retrying a possibly completed write.
+
+### Contribution-policy routing
+
+The coding assistant reads the target's current contribution rules, including
+linked guides, before choosing a route. Record that source-backed decision with
+`policy-review REPO --accept --publication-route pr_only --note '...'`.
+Use `--extra-path docs/contributing.rst` (repeatable) to include an exact linked
+repository file outside the standard locations. Its blob revision is pinned and
+fetched fresh again at submit time. This is policy review, not owner consent.
+
+`issue_pr` is the normal default when a complete review finds no specific
+publication rule. It does not mean hold. `pr_only` avoids a new issue for new
+work; an existing source issue is still reused. `issue_first` stops immediate
+submission until its discussion/feedback prerequisites have been reviewed.
+`unresolved` stops for unclear or conflicting rules. Neither a failed read nor an
+unread linked guide counts as no rules. The assistant must record unresolved
+rather than infer a route when it cannot finish reading the required sources.
+
+Submit applies the reviewed route, not a fixed repository allowlist. Changed or
+missing pinned sources require review again. The older explicit `pr_only_repos`
+setting cannot contradict a reviewed route. Arbitrary website text is not run as
+instructions; the assistant interprets contribution policy within the owner's
+existing authority. This does not sign agreements, approve spending, change
+safety limits, or implement every repository's custom process. External-only
+linked pages without a pinned repository source must be checked separately;
+the blob freshness guard does not certify those pages.

@@ -52,6 +52,8 @@ def build_parser() -> argparse.ArgumentParser:
     prv = add("policy-review", "show a repo's policy docs (URLs, SHAs) and optionally record YOUR review before submitting", "repo")
     prv.add_argument("--accept", action="store_true", help="record that you read the docs and the repo's own pages")
     prv.add_argument("--prohibited", action="store_true", help="record that the repo's rules forbid this contribution")
+    prv.add_argument("--publication-route", choices=["issue_pr", "pr_only", "issue_first", "unresolved"], help="source-backed route after reading contribution rules; not owner consent")
+    prv.add_argument("--extra-path", action="append", default=[], help="exact linked in-repository contribution file to pin and recheck")
     prv.add_argument("--note", default="", help="restrictions that apply, in your words")
     dr = add("review-duplicate", "record one reviewed false positive for this exact verified candidate", "id")
     dr.add_argument("number", type=int)
@@ -184,12 +186,12 @@ def main(argv: list[str] | None = None) -> int:
             print("READY to publish" if info["ready_to_publish"] else "NOT READY: " + "; ".join(miss and [f"{m} not set" for m in miss] or login + wt))
         return 0 if info["ready_to_publish"] else 1
     elif a.cmd == "policy-review":
-        snap = policy_review.snapshot(a.repo)
+        snap = policy_review.snapshot(a.repo, extra_paths=a.extra_path) if a.extra_path else policy_review.snapshot(a.repo)
         if a.accept or a.prohibited:
             if not a.note.strip():
                 print("--note is required: state the restrictions that apply (or 'none found after reading X')")
                 return 2
-            rec = policy_review.record(cfg, a.repo, snap, a.note, prohibited=a.prohibited)
+            rec = policy_review.record(cfg, a.repo, snap, a.note, prohibited=a.prohibited, publication_route=a.publication_route)
             print("recorded:", json.dumps({k: v for k, v in rec.items() if k != "docs"}), f"{len(rec['docs'])} doc(s) pinned")
         else:
             print(f"{a.repo}: {len(snap['docs'])} policy-bearing doc(s) found in the scanned locations; anti-AI wording: {snap['anti_ai']}")

@@ -17,9 +17,15 @@ from . import gh, policy
 from .config import Config
 
 
-def snapshot(repo: str) -> dict:
+def snapshot(repo: str, extra_paths: list[str] | None = None) -> dict:
     docs = []
-    for p in gh.existing_files(repo, policy.POLICY_FILES, fresh=True, strict=True):
+    extra_paths = extra_paths or []
+    for path in extra_paths:
+        parts = path.split("/")
+        if not path or path.startswith("/") or any(p in ("", ".", "..") for p in parts) or any(c in path for c in "*?[\\"):
+            raise ValueError("extra policy path must be an exact repository-relative file")
+    paths = gh.existing_files(repo, policy.POLICY_FILES, fresh=True, strict=True)
+    for p in sorted(set(paths + extra_paths)):
         d = gh.api(f"repos/{repo}/contents/{p}", fresh=True)
         if not isinstance(d, dict) or d.get("encoding") != "base64" or not d.get("sha") or not d.get("html_url"):
             raise gh.GhError(f"listed policy document could not be read: {p}")
@@ -27,7 +33,7 @@ def snapshot(repo: str) -> dict:
         docs.append({"path": p, "url": d["html_url"], "sha": d["sha"], "text": text})
     sc = policy.scan_files({d["path"]: d["text"] for d in docs})
     return {"repo": repo, "docs": docs, "scanned_locations": list(policy.POLICY_FILES), "anti_ai": sc.anti_ai,
-            "ai_policy_docs": policy.ai_policy_docs({d["path"]: d["text"] for d in docs})}
+            "extra_paths": extra_paths, "ai_policy_docs": policy.ai_policy_docs({d["path"]: d["text"] for d in docs})}
 
 
 def _file(cfg: Config):
@@ -41,10 +47,17 @@ def _load(cfg: Config) -> dict:
         return {}
 
 
-def record(cfg: Config, repo: str, snap: dict, note: str, prohibited: bool = False) -> dict:
+def record(cfg: Config, repo: str, snap: dict, note: str, prohibited: bool = False,
+           publication_route: str | None = None) -> dict:
+    if publication_route not in (None, "issue_pr", "pr_only", "issue_first", "unresolved"):
+        raise ValueError("unsupported publication route")
+    if publication_route is not None and not note.strip():
+        raise ValueError("publication route needs a source-backed review note")
     rec = {"repo": repo, "reviewed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "note": note,
            "prohibited": prohibited, "docs": [{k: d[k] for k in ("path", "url", "sha")} for d in snap["docs"]],
-           "scanned_locations": snap["scanned_locations"]}
+           "scanned_locations": snap["scanned_locations"], "extra_paths": snap.get("extra_paths", [])}
+    if publication_route is not None:
+        rec["publication_route"] = publication_route
     allr = _load(cfg)
     allr[repo.lower()] = rec
     _file(cfg).parent.mkdir(parents=True, exist_ok=True)
@@ -60,10 +73,26 @@ def check(cfg: Config, repo: str, snap: dict | None = None) -> str:
                 "prints (and the project's own contribution pages, which the scan cannot see), then record the review")
     if rec.get("prohibited"):
         return f"policy review for {repo} is recorded as prohibited: {rec.get('note', '')}"
-    snap = snap or snapshot(repo)
+    snap = snap or (snapshot(repo, extra_paths=rec["extra_paths"]) if rec.get("extra_paths") else snapshot(repo))
     now = {d["path"]: d["sha"] for d in snap["docs"]}
     was = {d["path"]: d["sha"] for d in rec["docs"]}
     if now != was:
         changed = sorted(set(now) ^ set(was) | {p for p in now if p in was and now[p] != was[p]})
         return f"policy documents changed since the review ({', '.join(changed)}); review {repo} again"
     return ""
+
+
+def publication_route(cfg: Config, repo: str) -> str | None:
+    """A reviewed policy decision, not instructions or consent extracted from prose."""
+    rec = _load(cfg).get(repo.lower()) or {}
+    route = rec.get("publication_route")
+    if route is None:
+        return None
+    why = check(cfg, repo)
+    if why:
+        raise ValueError(why)
+    if route not in {"issue_pr", "pr_only", "issue_first", "unresolved"}:
+        raise ValueError("publication route invalid; review policy again")
+    if route in {"issue_first", "unresolved"}:
+        raise ValueError(f"publication route {route}: review issue-first prerequisites or unresolved rules before submission")
+    return route
