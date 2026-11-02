@@ -14,7 +14,8 @@ CLAIM_RE = re.compile(
     r"(i'?m (working|taking)|i'?ll (take|work|do|fix|submit)|working on (this|it)|"
     r"can i (take|work|have)|assign (this )?to me|claiming|i'?ve started|"
     r"i(?: have|'ve) (?:a |the )?(?:working )?(?:fix|patch|solution) (?:ready|on my fork)|"
-    r"i(?: would|'d) like to work on|i (?:have|posted|pushed) a (?:working )?fix on my fork)",
+    r"i(?: would|'d) like to (?:work on|take\b)|i have started (?:working|implementing|fixing)|"
+    r"i (?:have|posted|pushed) a (?:working )?fix on my fork)",
     re.I,
 )
 
