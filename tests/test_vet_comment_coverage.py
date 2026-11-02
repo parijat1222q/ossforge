@@ -4,7 +4,7 @@ from ossforge import gh, vet
 def setup_vet(monkeypatch, count, rows):
     monkeypatch.setattr(vet.repo_access, 'pr_restriction', lambda r: '')
     monkeypatch.setattr(gh, 'api', lambda path, **kw: rows if path.endswith('/comments') else {
-        'body': 'Steps to reproduce: expected record retained; actual deletion occurs on invalid vector.',
+        'state': 'open', 'body': 'Steps to reproduce: expected record retained; actual deletion occurs on invalid vector.',
         'assignees': [], 'comments': count})
     monkeypatch.setattr(gh, 'search_issues', lambda *a, **kw: [])
     monkeypatch.setattr(vet, 'policy_texts', lambda r: {})
@@ -35,7 +35,7 @@ def test_full_page_request_finds_claim_after_default_page(monkeypatch):
         if path.endswith('/comments'):
             rows = [{'body': 'details'}] * 30 + [{'body': 'working on this'}]
             return rows[:kw.get('per_page', 30)]
-        return {'body': 'Steps to reproduce: expected record retained; actual deletion on invalid vector.',
+        return {'state': 'open', 'body': 'Steps to reproduce: expected record retained; actual deletion on invalid vector.',
                 'assignees': [], 'comments': 31}
     monkeypatch.setattr(gh, 'api', api)
     verdict = vet.vet_issue('org/repo', 7)
