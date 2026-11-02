@@ -9,7 +9,7 @@ def _issue(n, body="Steps: run x, expected y, got z. Reproduce with `foo`.", tit
 
 
 def _cfg(tmp_path):
-    return Config(kill_file=str(tmp_path / "STOP"))
+    return Config(kill_file=str(tmp_path / "STOP"), state_dir=str(tmp_path / "state"))
 
 
 def test_no_matches_is_distinct_from_filtered(monkeypatch, tmp_path):
@@ -34,6 +34,8 @@ def test_rate_limit_reports_partial_not_silence(monkeypatch, tmp_path):
     assert scout.scout(_cfg(tmp_path)) == []
     msg = scout.explain_funnel(scout.LAST_FUNNEL)
     assert msg.startswith("STOPPED EARLY") and "rate limit" in msg
+    # Test a fresh search failure separately from the pending-batch resume.
+    (_cfg(tmp_path).path("discovery-resume.json")).unlink()
     monkeypatch.setattr(gh, "search_issues", lambda *a, **k: (_ for _ in ()).throw(gh.RateLimited("cooldown", 429, 30)))
     scout.scout(_cfg(tmp_path))
     assert scout.explain_funnel(scout.LAST_FUNNEL).startswith("STOPPED EARLY")

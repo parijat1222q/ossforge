@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from . import acceptance, gh, issue_reviews, radar, vet
+from . import acceptance, discovery_resume, gh, issue_reviews, radar, vet
 from .config import Config
 from .outcomes import Stats
 
@@ -106,7 +106,7 @@ def explain_funnel(f: dict) -> str:
     if not f.get("fetched"):
         return "NO MATCHES: the search returned no issues for this query (try another label/language or lower min_stars)."
     if not f.get("kept"):
-        dropped = {k: f[k] for k in ("spam", "unclear", "skipped", "reviewed_unchanged", "recently_surfaced", "below_min_stars", "repo_metadata_failed", "radar_failed") if f.get(k)}
+        dropped = {k: f[k] for k in ("spam", "unclear", "skipped", "reviewed_unchanged", "recently_surfaced", "below_min_stars", "repo_metadata_failed", "radar_failed", "closed_or_missing") if f.get(k)}
         return f"ALL FILTERED: {f['fetched']} issues found, none usable; dropped by stage: {dropped or 'n/a'}."
     return f"{f['kept']} of {f['fetched']} issues kept ({f['approved']} approved)."
 
@@ -123,18 +123,42 @@ def scout(
 ) -> list[Candidate]:
     f = LAST_FUNNEL
     f.clear()
-    f.update(fetched=0, spam=0, unclear=0, skipped=0, reviewed_unchanged=0, recently_surfaced=0, radar_failed=0, repo_metadata_failed=0, below_min_stars=0, kept=0, approved=0, stopped="")
+    f.update(fetched=0, spam=0, unclear=0, skipped=0, reviewed_unchanged=0, recently_surfaced=0, radar_failed=0, repo_metadata_failed=0, closed_or_missing=0, resumed=0, below_min_stars=0, kept=0, approved=0, stopped="")
     scores: dict[str, radar.RepoScore] = {}
     repo_stars: dict[str, int] = {}
     reviews = issue_reviews.load(cfg.path("issue_reviews.json"))
     out: list[Candidate] = []
+    actual_query = query or build_query(language, label, cfg.min_stars)
+    resume_path = cfg.path("discovery-resume.json")
+    pending = discovery_resume.load(resume_path, actual_query, limit)
     try:
-        items = gh.search_issues(query or build_query(language, label, cfg.min_stars), per_page=limit)
+        items = pending if pending is not None else gh.search_issues(actual_query, per_page=limit)
     except (gh.RateLimited, gh.ReadBudgetExceeded) as e:
         f["stopped"] = f"GitHub read deadline or rate limit while searching ({e}); nothing was fetched"
         return out
     f["fetched"] = len(items)
-    for it in items:
+    for _index, it in enumerate(items):
+        if pending is not None:
+            repo, number = it['repo'], it['number']
+            try:
+                it = gh.api(f"repos/{repo}/issues/{number}", fresh=True)
+            except (gh.RateLimited, gh.ReadBudgetExceeded) as exc:
+                f['stopped'] = f"GitHub read deadline or rate limit while refreshing {repo}#{number} ({exc})"
+                break
+            except gh.GhError as exc:
+                if exc.status == 404:
+                    f['closed_or_missing'] += 1
+                    continue
+                f['stopped'] = f"GitHub issue refresh unavailable for {repo}#{number}: {exc}"
+                break
+            if not isinstance(it, dict) or it.get('state') not in ('open', 'closed') or it.get('number') != number:
+                f['stopped'] = f'GitHub issue refresh malformed for {repo}#{number}'
+                break
+            if it.get('state') != 'open' or it.get('pull_request'):
+                f['closed_or_missing'] += 1
+                continue
+            it = {**it, 'repository_url': f'https://api.github.com/repos/{repo}'}
+            f['resumed'] += 1
         # cheap local filters first: they cost no API calls
         if is_spam(it["title"], it.get("body") or "", cfg.spam_keywords):
             f["spam"] += 1
@@ -201,6 +225,13 @@ def scout(
                              acceptance=acc.status if acc else "not checked", updated_at=it.get("updated_at") or ""))
         f["kept"] += 1
         f["approved"] += v.decision == "approve"
+    if f['stopped']:
+        remaining = (items[_index:] if pending is not None else
+                     [{'repo': it['repository_url'].split('repos/')[1], 'number': it['number']}
+                      for it in items[_index:]])
+        discovery_resume.save(resume_path, actual_query, limit, remaining)
+    else:
+        discovery_resume.save(resume_path, actual_query, limit, [])
     out.sort(key=lambda c: (c.verdict.decision != "approve", -c.score))
     return out
 

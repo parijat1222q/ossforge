@@ -137,3 +137,21 @@ branch before launching a driver or reserving an attempt. Dirty/detached work
 stops for inspection instead of asking a new driver to overwrite it. The
 contract still does not isolate a driver from the filesystem or verify that a
 clean candidate is a genuine bug.
+
+### Resuming a bounded discovery batch
+
+If read time or a GitHub cooldown interrupts issue vetting, discovery records
+only the current and unexamined repository/issue identifiers. The next matching
+query and limit resumes those leads instead of spending its budget on the same
+completed items again. Each resumed issue is fetched fresh, checked for closure,
+and passed through the normal requirements, review, stars, health, access,
+policy, claims and competing-PR checks. Saved leads are not approved work or
+authority to publish. Submission still performs its own fresh boundary checks.
+
+Positions expire after one hour, with at most 20 batches and 100 identifiers per
+batch. Changing a query or limit uses a separate position. Completed batches are
+removed; a later fresh search can revisit old results. A malformed or expired
+position starts a fresh search, not a positive vetting decision. The local
+checkpoint is not a tamper-resistant security boundary, and this does not save
+partial progress inside one expensive issue's vetting. An issue that cannot fit
+the read budget may still need a deliberately larger bounded budget or review.
