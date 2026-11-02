@@ -259,3 +259,37 @@ def test_same_gate_reuses_identical_queries_but_next_gate_is_fresh(monkeypatch):
             dedupe.find_matches('o/r', 'RawJSON Unicode corrupts ASCII', '', path, [], strict=True, **extra)
     assert len(calls) == 8  # three distinct paths plus one shared title, per fresh gate
     assert all(kw['fresh'] and kw['require_complete'] for _, kw in calls)
+
+
+def test_empty_title_uses_body_evidence_without_repo_wide_query(monkeypatch):
+    from ossforge import gh
+    calls = []
+    body = 'Replacement vector update deletes existing retained memory record on invalid dimensions'
+    def search(query, **kw):
+        calls.append(query)
+        if query.strip() == 'repo:o/r':
+            raise gh.GhError('search coverage incomplete')
+        if 'replacement' in query.lower():
+            return [{'number': 7, 'title': 'Replacement vector update', 'body': body,
+                     'state': 'open', 'html_url': 'https://example.invalid/7'}]
+        return []
+    monkeypatch.setattr(gh, 'search_issues', search)
+    hits = dedupe.find_matches('o/r', 'Fix bug', body, 'new/path.py', [], strict=True)
+    assert hits and hits[0].number == 7
+    assert not any(q.strip() == 'repo:o/r' for q in calls)
+
+
+def test_no_semantic_evidence_requires_review_not_repo_wide_search(monkeypatch):
+    from ossforge import gh
+    calls = []
+    monkeypatch.setattr(gh, 'search_issues', lambda q, **kw: calls.append(q) or [])
+    with pytest.raises(dedupe.Incomplete, match='evidence'):
+        dedupe.find_matches('o/r', 'Fix bug', '', 'a.py', [], strict=True)
+    assert not any(q.strip() == 'repo:o/r' for q in calls)
+
+
+def test_empty_commit_keywords_still_check_api_availability(monkeypatch):
+    from ossforge import gh
+    monkeypatch.setattr(gh, 'api', lambda *a, **kw: (_ for _ in ()).throw(gh.GhError('unavailable')))
+    with pytest.raises(dedupe.Incomplete, match='unavailable'):
+        dedupe.recent_commit_hits('o/r', 'a.py', [], strict=True)

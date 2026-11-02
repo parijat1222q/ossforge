@@ -97,7 +97,7 @@ def world(tmp_path, monkeypatch):
     gh.configure(None)
     cfg = Config(kill_file=str(tmp_path / "STOP"), state_dir=str(tmp_path / ".state"), github_user="me",
                  git_name=ME[0], git_email=ME[1])
-    it = queue.Item("a", "acme/lib", "a.py", 1, "k", "d", status="verified", issue_title="t", issue_body="b",
+    it = queue.Item("a", "acme/lib", "a.py", 1, "k", "d", status="verified", issue_title="Parser data regression", issue_body="Parser data regression",
                     pr_title="fix: x", pr_body="b", branch="fix/x", clone=str(clone))
     it.verification = evidence.capture(clone, sh("git", "merge-base", "HEAD", "origin/HEAD", cwd=clone), [["fixture-test"]])
     policy_review.record(cfg, "acme/lib", {"docs": [], "scanned_locations": []}, "test: no restrictions")
@@ -800,3 +800,41 @@ def test_reviewed_dynamic_pr_only_route_without_config_allowlist(world):
     out = run(world, execute=True)
     assert out['issue'] is None
     assert [w[:2] for w in writes(world['log'])] == [['repo', 'fork'], ['pr', 'create']]
+
+
+def test_stopword_title_fallback_detects_competing_body_before_writes(world):
+    from ossforge import dedupe
+    world['it'].issue_title = 'Fix bug'
+    world['it'].issue_body = 'Replacement vector update deletes existing retained memory record on invalid dimensions'
+    def search(query, **kw):
+        assert query.strip() != 'repo:acme/lib'
+        if 'replacement' in query.lower():
+            return [{'number': 7, 'title': 'Replacement vector update', 'body': world['it'].issue_body,
+                     'state': 'open', 'html_url': 'https://example.invalid/7'}]
+        return []
+    world['mp'].setattr(dedupe.gh, 'search_issues', search)
+    with pytest.raises(submit.Refused, match='duplicate found'):
+        run(world, True)
+    assert writes(world['log']) == []
+
+
+def test_stopword_title_uses_body_terms_for_recent_commit_gate(world):
+    from ossforge import dedupe
+    world['it'].issue_title = 'Fix bug'
+    world['it'].issue_body = 'Replacement vector update deletes existing retained memory record on invalid dimensions'
+    seen = []
+    def commits(repo, path, keywords, **kw):
+        seen.extend(keywords)
+        return ['https://example.invalid/commit/7'] if 'replacement' in keywords else []
+    world['mp'].setattr(dedupe, 'recent_commit_hits', commits)
+    with pytest.raises(submit.Refused, match='recent commit'):
+        run(world, True)
+    assert 'replacement' in seen and writes(world['log']) == []
+
+
+def test_insufficient_semantic_evidence_refuses_before_writes(world):
+    world['it'].issue_title = 'Fix bug'
+    world['it'].issue_body = 'Fix bug'
+    with pytest.raises(submit.Refused, match='evidence'):
+        run(world, True)
+    assert writes(world['log']) == []

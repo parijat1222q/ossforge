@@ -24,6 +24,11 @@ def tokens(text: str) -> set[str]:
     return out - STOP
 
 
+def evidence_terms(title: str, body: str) -> list[str]:
+    """Prefer title keywords, then meaningful body words when the title has none."""
+    return sorted(tokens(title))[:6] or sorted(tokens(body), key=lambda t: (-len(t), t))[:6]
+
+
 def similarity(a: str, b: str) -> float:
     ta, tb = tokens(a), tokens(b)
     return len(ta & tb) / len(ta | tb) if ta and tb else 0.0
@@ -42,9 +47,14 @@ class Match:
 
 def find_matches(repo: str, title: str, body: str, path: str, symbols: list[str], threshold: float = 0.25, *, strict: bool = False, query_results: dict | None = None) -> list[Match]:
     """Searches by file path, symbols, and title keywords; scores each hit locally."""
-    queries = [f'repo:{repo} "{path}"']
-    queries += [f"repo:{repo} {s}" for s in symbols[:3] if s]
-    queries.append(f"repo:{repo} " + " ".join(sorted(tokens(title))[:6]))
+    terms = evidence_terms(title, body)
+    meaningful_symbols = [s for s in symbols[:3] if tokens(s)]
+    if strict and not terms and not meaningful_symbols:
+        raise Incomplete("insufficient semantic duplicate evidence; review title/body/symbols before publication")
+    queries = [f'repo:{repo} "{path}"'] if path else []
+    queries += [f"repo:{repo} {s}" for s in meaningful_symbols]
+    if terms:
+        queries.append(f"repo:{repo} " + " ".join(terms))
     seen: dict[int, Match] = {}
     probe = f"{title}\n{body}"
     for q in queries:
