@@ -24,14 +24,21 @@ class Plan:
 
 
 def discover_broad_repos(cfg: Config, language: str | None = None, cursor: int = 0) -> list[str]:
-    """Phase 1: discover qualifying repositories meeting min_stars via repository search."""
+    """Take five repos per broad turn; page over the first990 ranked results.
+
+    GitHub search only exposes the first1000 results.33 full pages of30
+    keep requests within that limit; rotation then wraps, not exhaustive search.
+    """
     if cfg.min_stars <= 0:
         return []
     query = f"stars:>={cfg.min_stars} fork:false archived:false"
     if language:
         query += f" language:{language}"
     try:
-        repos = gh.search_repositories(query, per_page=30, sort="stars")
+        page = (cursor // 6) % 33 + 1
+        repos = gh.search_repositories(query, per_page=30, sort="stars", page=page)
+        if not repos and page > 1:
+            repos = gh.search_repositories(query, per_page=30, sort="stars", page=1)
     except gh.RateLimited:
         raise
     except (gh.GhError, OSError):
@@ -40,7 +47,7 @@ def discover_broad_repos(cfg: Config, language: str | None = None, cursor: int =
     if not names:
         return []
     window_size = 5
-    start = (cursor * window_size) % len(names)
+    start = ((cursor % 6) * window_size) % len(names)
     return [names[(start + i) % len(names)] for i in range(min(window_size, len(names)))]
 
 
@@ -89,7 +96,11 @@ def discover(cfg: Config, stats: Stats, language: str | None = None, label: str 
     recent = recent if isinstance(recent, dict) else {}
     try:
         if selected.strategy == "broad" and not selected.repos:
-            broad_repos = discover_broad_repos(cfg, language, cursor)
+            # Count broad turns, not global turns interleaved with affinity.
+            preferred = any(_REPO.fullmatch(r) for r in cfg.preferred_repos)
+            history = any(_REPO.fullmatch(r) and stats.repo_boost(r) > 0 for r in stats.d["repos"])
+            stride = 1 + int(preferred) + int(history) if strategy == "rotate" else 1
+            broad_repos = discover_broad_repos(cfg, language, cursor // stride)
             if broad_repos:
                 selected.repos = broad_repos
                 selected.query = scout.build_query(language, label, cfg.min_stars) + " " + " ".join(f"repo:{r}" for r in broad_repos)
