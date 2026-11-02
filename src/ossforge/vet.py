@@ -121,7 +121,9 @@ def vet_issue(repo: str, number: int, repo_ok: bool = True) -> Verdict:
     if restricted:
         return Verdict(f"{repo}#{number}", "skip", [restricted])
     issue = gh.api(f"repos/{repo}/issues/{number}")
-    comments = gh.api(f"repos/{repo}/issues/{number}/comments") or []
+    comments = gh.api(f"repos/{repo}/issues/{number}/comments", per_page=100) or []
+    if len(comments) >= 100 or issue.get("comments", 0) > len(comments):
+        return Verdict(f"{repo}#{number}", "skip", ["comment coverage incomplete; review remaining discussion before coding"])
     resolved = resolution_evidence(comments)
     if resolved:
         return Verdict(f"{repo}#{number}", "skip", [resolved])
