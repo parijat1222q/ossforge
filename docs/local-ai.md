@@ -33,6 +33,10 @@ Do not start a nested model process just because you are already an AI assistant
 >   policy, prepare identity, add a regression and minimal fix on a named branch,
 >   and commit with ossforge commit. Produce the task's exact schema-1 result and
 >   run agent-verify. Read failure logs; missing dependencies are not bug proof.
+> - wait_for_cooldown: stop remote work until the recorded retry time. Do not
+>   clear the record or switch accounts. This is not a clean no-find.
+> - review_incomplete_discovery: inspect the previous run journal. Resolve the
+>   stop reason before a bounded retry; partial reads are not absence of work.
 > - no_work: run the supplied bounded discovery command. Review its actual leads,
 >   radar/acceptance/policy evidence and hunt promising targets; then agent-next
 >   again. Discovery does not enqueue by itself. A no-find pass is not global

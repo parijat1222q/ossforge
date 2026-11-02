@@ -8,7 +8,7 @@ from ossforge.queue import Item, Queue
 
 
 def fixture(tmp_path, monkeypatch):
-    cfg = Config(kill_file=str(tmp_path / 'STOP'))
+    cfg = Config(state_dir=str(tmp_path / 'state'), kill_file=str(tmp_path / 'STOP'))
     q = Queue(tmp_path / 'q.json')
     item = Item('a', 'owner/repo', 'x.py', 1, 'bug', 'candidate', status='verified',
                 clone=str(tmp_path), branch='fix', verification={'schema': 1})
@@ -98,3 +98,44 @@ def test_real_cli_checkpoint_config_stop_and_no_network(tmp_path):
     assert p.returncode == 0, p.stderr
     out = json.loads(p.stdout)
     assert out['status'] == 'no_work' and str(cfg) in out['next_argv']
+
+
+def test_no_work_honors_recorded_cooldown_without_search(tmp_path, monkeypatch):
+    import time
+    cfg = Config(state_dir=str(tmp_path / 'state'), kill_file=str(tmp_path / 'STOP'))
+    cfg.path('ratelimit_until').parent.mkdir(parents=True)
+    cfg.path('ratelimit_until').write_text(str(time.time() + 120))
+    out = agent_next.next_step(cfg, Queue(cfg.path('queue.json')), 'c.yaml')
+    assert out['status'] == 'wait_for_cooldown'
+    assert out['retry_after_seconds'] > 0
+    assert 'next_argv' not in out
+
+
+def test_incomplete_discovery_is_not_clean_no_find(tmp_path):
+    import json
+    cfg = Config(state_dir=str(tmp_path / 'state'), kill_file=str(tmp_path / 'STOP'))
+    cfg.path('run.json').parent.mkdir(parents=True)
+    cfg.path('run.json').write_text(json.dumps({'status': 'discovery_budget_exhausted'}))
+    out = agent_next.next_step(cfg, Queue(cfg.path('queue.json')), 'c.yaml')
+    assert out['status'] == 'review_incomplete_discovery'
+    assert out['next_argv'][-1] == 'rotate'
+    assert 'partial' in out['reason']
+
+
+def test_unreadable_cooldown_does_not_invite_new_discovery(tmp_path):
+    cfg = Config(state_dir=str(tmp_path / 'state'), kill_file=str(tmp_path / 'STOP'))
+    cfg.path('ratelimit_until').parent.mkdir(parents=True)
+    cfg.path('ratelimit_until').write_text('corrupt')
+    out = agent_next.next_step(cfg, Queue(cfg.path('queue.json')), 'c.yaml')
+    assert out['status'] == 'inspect_local'
+    assert 'next_argv' not in out
+
+
+def test_existing_candidate_remains_actionable_during_cooldown(tmp_path, monkeypatch):
+    import time
+    cfg, q, item = fixture(tmp_path, monkeypatch)
+    cfg.path('ratelimit_until').parent.mkdir(parents=True)
+    cfg.path('ratelimit_until').write_text(str(time.time() + 100))
+    item.status = 'clean'
+    monkeypatch.setattr(evidence, 'capture', lambda *a: {})
+    assert agent_next.next_step(cfg, q, 'c')['status'] == 'work_candidate'
