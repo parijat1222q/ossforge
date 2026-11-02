@@ -24,6 +24,25 @@ def comment_claims_issue(body: str) -> bool:
     return bool(CLAIM_RE.search((body or "").replace("’", "'")))
 
 
+def resolution_evidence(comments: list[dict]) -> str:
+    """Conservative triage hint, not proof that a claimed fix is correct or shipped."""
+    # A later/current failure report makes automatic resolution triage ambiguous.
+    texts = [re.sub(r"```.*?```", "", c.get("body") or "", flags=re.S).lower() for c in comments]
+    if any(re.search(r"(?:still|again) (?:fails?|broken|reproduc|happens)|not (?:yet )?(?:fixed|resolved|merged)", t)
+           for t in texts):
+        return ""
+    for comment, text in zip(comments, texts):
+        if comment.get("author_association") not in {"OWNER", "MEMBER", "COLLABORATOR"}:
+            continue
+        for sentence in re.split(r"\.(?:\s|$)|\n", text):
+            match = re.search(r"\b(?:was|is|has been) (?:already )?(?:fixed|resolved|merged)\b", sentence)
+            if not match or re.search(r"\b(?:not|never|will|would|could|should|if|once)\b", sentence[:match.end()]):
+                continue
+            if re.search(r"(?:#\d+|github\.com/[^ /]+/[^ /]+/(?:pull|commit)/[a-z0-9]+)", sentence):
+                return "maintainer-associated comment reports resolved work; inspect referenced fix/current source before reconsidering"
+    return ""
+
+
 def clear_requirements(body: str) -> bool:
     b = body or ""
     return len(b) >= 80 and bool(
@@ -95,6 +114,9 @@ def vet_issue(repo: str, number: int, repo_ok: bool = True) -> Verdict:
         return Verdict(f"{repo}#{number}", "skip", [restricted])
     issue = gh.api(f"repos/{repo}/issues/{number}")
     comments = gh.api(f"repos/{repo}/issues/{number}/comments") or []
+    resolved = resolution_evidence(comments)
+    if resolved:
+        return Verdict(f"{repo}#{number}", "skip", [resolved])
     claimed = any(comment_claims_issue(c.get("body", "")) for c in comments)
     prs = gh.search_issues(f"repo:{repo} is:pr is:open #{number} in:body,title", per_page=10)
     files = policy_texts(repo)
