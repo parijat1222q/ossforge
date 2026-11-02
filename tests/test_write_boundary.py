@@ -838,3 +838,23 @@ def test_insufficient_semantic_evidence_refuses_before_writes(world):
     with pytest.raises(submit.Refused, match='evidence'):
         run(world, True)
     assert writes(world['log']) == []
+
+
+@pytest.mark.parametrize('activity', ['incomplete', 'resolved'])
+def test_source_publication_rechecks_complete_unresolved_discussion(world, activity):
+    original = gh.api
+    world['it'].source_issue = 42
+    def api(path, /, **kw):
+        if path.endswith('/issues/42'):
+            return {'state': 'open', 'html_url': 'https://github.com/acme/lib/issues/42', 'comments': 2 if activity == 'incomplete' else 1}
+        if path.endswith('/issues/42/comments'):
+            if activity == 'resolved':
+                return [{'body': 'This was fixed in #41.', 'author_association': 'OWNER'}]
+            return [{'body': 'Can you provide a reproduction?'}]
+        if path.endswith('/issues/42/timeline'):
+            return []
+        return original(path, **kw)
+    world['mp'].setattr(gh, 'api', api)
+    with pytest.raises(submit.Refused, match='coverage|resolved'):
+        run(world, True)
+    assert writes(world['log']) == []
