@@ -718,3 +718,77 @@ def test_repository_policy_change_before_pr_preserves_progress_without_pr(world)
     assert not any(w[:2] == ['pr', 'create'] for w in observed)
     assert world['it'].submitted.get('issue_url')
     assert world['it'].submitted.get('fork_pushed')
+
+
+def test_explicit_pr_only_target_never_creates_issue_or_close_reference(world):
+    world['cfg'].pr_only_repos = ['acme/lib']
+    out = run(world, execute=True)
+    assert out['issue'] is None
+    assert [w[:2] for w in writes(world['log'])] == [['repo', 'fork'], ['pr', 'create']]
+    command = writes(world['log'])[-1]
+    assert 'Closes #' not in command[command.index('-b') + 1]
+    assert world['it'].submitted['publication_mode'] == 'pr_only'
+    assert world['it'].submitted['pr_url'] == out['pr']
+
+
+def test_pr_only_dry_run_exposes_mode_without_effect(world):
+    world['cfg'].pr_only_repos = ['acme/lib']
+    out = run(world)
+    assert out['publication_mode'] == 'pr_only' and out['issue'] is None
+    assert writes(world['log']) == []
+
+
+def test_pr_only_resume_keeps_mode_and_does_not_duplicate_fork(world):
+    world['cfg'].pr_only_repos = ['acme/lib']
+    first = run(world, execute=True)
+    world['it'].submitted = {'publication_mode': 'pr_only', 'fork_pushed': True, 'pr_url': first['pr']}
+    world['log'].write_text('')
+    assert run(world, execute=True)['pr'] == first['pr']
+    assert writes(world['log']) == []
+
+
+def test_pr_only_progress_cannot_silently_switch_to_issue_creation(world):
+    world['it'].submitted = {'publication_mode': 'pr_only', 'fork_pushed': True}
+    with pytest.raises(submit.Refused, match='publication mode'):
+        run(world, execute=True)
+    assert writes(world['log']) == []
+
+
+def test_pr_only_setting_does_not_discard_existing_source_issue(world):
+    world['cfg'].pr_only_repos = ['acme/lib']
+    world['it'].source_issue = 11
+    out = run(world, execute=True)
+    assert out['issue'].endswith('/issues/11')
+    assert [w[:2] for w in writes(world['log'])] == [['repo', 'fork'], ['pr', 'create']]
+    assert 'Closes #11' in writes(world['log'])[-1][-1]
+
+
+def test_pr_only_cannot_hide_existing_saved_issue(world):
+    world['cfg'].pr_only_repos = ['acme/lib']
+    world['it'].submitted = {'issue_url': 'https://github.com/acme/lib/issues/11'}
+    with pytest.raises(submit.Refused, match='saved issue'):
+        run(world, execute=True)
+    assert writes(world['log']) == []
+
+
+def test_pr_only_still_blocks_new_competitor_before_any_effect(world):
+    world['cfg'].pr_only_repos = ['acme/lib']
+    world['mp'].setattr(submit, '_duplicate_gate', lambda *a: (_ for _ in ()).throw(submit.Refused('competitor')))
+    with pytest.raises(submit.Refused, match='competitor'):
+        run(world, execute=True)
+    assert writes(world['log']) == []
+
+
+def test_pr_only_partial_push_resume_rechecks_and_creates_only_pr(world):
+    world['cfg'].pr_only_repos = ['acme/lib']
+    world['it'].submitted = {'publication_mode': 'pr_only', 'fork_pushed': True}
+    seen = []
+    original = submit._duplicate_gate
+    def gate(*args):
+        seen.append(1)
+        return original(*args)
+    world['mp'].setattr(submit, '_duplicate_gate', gate)
+    result = run(world, execute=True)
+    assert result['issue'] is None and result['pr']
+    assert [w[:2] for w in writes(world['log'])] == [['pr', 'create']]
+    assert len(seen) == 2

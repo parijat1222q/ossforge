@@ -14,6 +14,7 @@ HARD_DAILY_MAX = 2  # not configurable above this
 class Config:
     maintainer_admission: bool = False  # opt-in manifest/issue-label scope plus draft-only publication
     daily_cap: int = 2
+    pr_only_repos: list[str] = field(default_factory=list)  # explicitly reviewed targets: no new issue for new work
     signoff: bool = False             # add a DCO Signed-off-by to every repo (an attestation: approve it yourself)
     signoff_repos: list[str] = field(default_factory=list)  # per-repo approval of the DCO sign-off, "owner/name"
     git_name: str = ""                # expected commit author/committer name; publishing stops if it differs

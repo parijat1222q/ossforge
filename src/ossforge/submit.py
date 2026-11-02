@@ -194,11 +194,23 @@ def _duplicate_gate(it: Item, cfg: Config | None = None) -> None:
         raise Refused(str(exc)) from exc
 
 
+def _publication_mode(it: Item, cfg: Config) -> str:
+    # Existing source issues remain linked; PR-only means no NEW issue.
+    mode = "pr_only" if not it.source_issue and it.repo.lower() in {r.lower() for r in cfg.pr_only_repos} else "issue_pr"
+    saved_mode = it.submitted.get("publication_mode")
+    if saved_mode is not None and saved_mode != mode:
+        raise Refused("publication mode changed after saved progress; reconcile before retry")
+    if mode == "pr_only" and it.submitted.get("issue_url"):
+        raise Refused("PR-only mode conflicts with a saved issue; reconcile before retry")
+    return mode
+
+
 def preflight(it: Item, limiter: DailyLimiter, cfg: Config, history: list[dict]) -> None:
     try:
         safety.kill_switch(cfg)
     except safety.Blocked as e:
         raise Refused(str(e)) from e
+    _publication_mode(it, cfg)
     if it.status != "verified":
         raise Refused(f"status is {it.status!r}, must be 'verified'")
     if not (it.issue_title and it.issue_body and it.pr_title and it.pr_body and it.branch and it.clone):
@@ -206,7 +218,7 @@ def preflight(it: Item, limiter: DailyLimiter, cfg: Config, history: list[dict])
     if limiter.remaining() <= 0 and not it.submitted.get("pr_url"):
         raise Refused("daily PR cap reached")
     why = safety.repo_allowed(cfg, it.repo, history)
-    if why and not it.submitted.get("issue_url"):
+    if why and not (it.submitted.get("issue_url") or it.submitted.get("pr_url")):
         raise Refused(why)
     _repo_access_gate(it)
     _upstream_gate(it)
@@ -292,7 +304,8 @@ def _submit(it: Item, limiter: DailyLimiter, cfg: Config, audit: safety.Audit, e
     except safety.Blocked as exc:
         raise Refused(str(exc)) from exc
     preflight(it, limiter, cfg, history)
-    plan = {"repo": it.repo, "issue": it.issue_title, "pr": it.pr_title, "branch": it.branch,
+    mode = _publication_mode(it, cfg)
+    plan = {"repo": it.repo, "publication_mode": mode, "issue": None if mode == "pr_only" else it.issue_title, "pr": it.pr_title, "branch": it.branch,
             "resume": bool(it.submitted.get("issue_url")),
             "disclosure": "add" if _disclosure(cfg, it.repo)[0] else "no"}
     plan["maintainer_admission"] = _admission_gate(it, cfg)
@@ -309,7 +322,7 @@ def _submit(it: Item, limiter: DailyLimiter, cfg: Config, audit: safety.Audit, e
     # A PR-only resume makes no issue/fork write here. Keep its fresh checks at
     # the PR write boundary below, instead of repeating a no-effect checkpoint.
     _repo_access_gate(it)
-    if not (prog.get("issue_url") and prog.get("fork_pushed")):
+    if not ((mode == "pr_only" or prog.get("issue_url")) and prog.get("fork_pushed")):
         _upstream_gate(it)
         _source_work_gate(it)
         _duplicate_gate(it, cfg)
@@ -328,11 +341,13 @@ def _submit(it: Item, limiter: DailyLimiter, cfg: Config, audit: safety.Audit, e
         if url != f"https://github.com/{it.repo}/issues/{it.source_issue}":
             raise Refused("source issue URL does not match the target")
         progress(issue_url=url, existing_issue=True)
-    if not prog.get("issue_url"):
+    if mode != "pr_only" and not prog.get("issue_url"):
         url = _run(["gh", "issue", "create", "-R", it.repo, "-t", it.issue_title, "-b", it.issue_body + note])
         progress(issue_url=url)
         audit.log("issue_opened", repo=it.repo, url=url, item=it.id)
-    num = prog["issue_url"].rsplit("/", 1)[-1]
+    if mode == "pr_only" and not prog.get("publication_mode"):
+        progress(publication_mode=mode)
+    num = prog["issue_url"].rsplit("/", 1)[-1] if prog.get("issue_url") else None
 
     if not prog.get("fork_pushed"):
         _repo_access_gate(it)
@@ -356,12 +371,12 @@ def _submit(it: Item, limiter: DailyLimiter, cfg: Config, audit: safety.Audit, e
         _upstream_gate(it)
         _source_work_gate(it)
         _duplicate_gate(it, cfg)
-        body = f"{it.pr_body}\n\nCloses #{num}{note}"
+        body = it.pr_body + (f"\n\nCloses #{num}" if num else "") + note
         _admission_gate(it, cfg)
         draft = ["--draft"] if cfg.maintainer_admission else []
         url = _run(["gh", "pr", "create", *draft, "-R", it.repo, "--head", f"{me}:{it.branch}", "-t", it.pr_title, "-b", body], cwd)
         progress(pr_url=url)
         limiter.record()
         audit.log("pr_opened", repo=it.repo, pr=int(url.rsplit("/", 1)[-1]), url=url, item=it.id, state="open")
-    return {"dry_run": False, "issue": prog["issue_url"], "pr": prog["pr_url"],
+    return {"dry_run": False, "issue": prog.get("issue_url"), "pr": prog["pr_url"],
             "disclosure_added": add_note, "disclosure_policy": disc.status, "disclosure_source": disc.source}

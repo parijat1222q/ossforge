@@ -491,3 +491,18 @@ For a recent-commit keyword false positive, inspect the complete commit first, t
 `ossforge review-commit-match ITEM FULL_SHA --reason "different API/cause"`.
 It binds the same candidate receipt/text to one immutable commit SHA/tree/parents;
 new commit hits and candidate changes still block, and each read must succeed.
+
+### Targets that ask for a PR without a new issue
+
+After reviewing a target's current contribution guide, list it in
+`pr_only_repos: [owner/repo]` to avoid creating a new issue for new work.
+This is a publication-shape choice, not permission or automatic policy detection.
+An existing `source_issue` is still checked and linked normally. Other targets
+keep the default issue-plus-PR flow.
+
+The dry run names `publication_mode`. PR-only progress records that mode before
+fork/push effects, returns `issue: null`, and adds no invented `Closes` reference.
+Changing the mode after progress, or hiding a saved issue under PR-only mode,
+stops for reconciliation. Identity, current upstream, policy review, duplicates,
+exact-tree verification and submission limits remain checked. Reconcile unknown
+remote outcomes instead of retrying a possibly completed write.
