@@ -7,7 +7,7 @@ import subprocess
 from . import gh, identity, policy, policy_review, safety, vet
 from .config import Config
 
-NOTE = "\n\n_This review was prepared with AI assistance and checked by a human before posting._"
+NOTE = "\n\n_This review was prepared with AI assistance._"
 
 
 class Refused(Exception):

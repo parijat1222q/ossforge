@@ -17,7 +17,7 @@ from .config import Config
 from .limiter import DailyLimiter
 from .queue import Item
 
-DISCLOSURE = "\n\n---\n_This issue/PR was prepared with AI assistance and reviewed by a human before submission._"
+DISCLOSURE = "\n\n---\n_This issue/PR was prepared with AI assistance._"
 
 
 class Refused(Exception):
