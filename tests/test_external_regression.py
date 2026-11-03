@@ -70,7 +70,10 @@ def test_external_stale_inputs_refuse(case, change, monkeypatch):
         path.unlink()
         other = path.parent/'other.py'
         other.write_bytes(data)
-        path.symlink_to(other)
+        try:
+            path.symlink_to(other)
+        except (OSError, NotImplementedError) as exc:
+            pytest.skip(f'Symlink creation unavailable: {exc}')
     elif change == 'command':
         rec['command'].append('-c')
     elif change == 'root':
