@@ -125,7 +125,9 @@ def build_parser() -> argparse.ArgumentParser:
     add("environment-status", "inspect an unchanged prepared environment receipt", "id", "receipt_file")
     nr = add("environment-replay-pytest", "bounded Python pytest replay; never promote or publish", "id", "receipt_file", "spec_file")
     nr.add_argument("--timeout", type=int, default=600)
-    add("agent-verify", "validate external-driver result and rerun tests; never publish", "result_file")
+    av = add("agent-verify", "validate external-driver result and rerun tests; never publish", "result_file")
+    av.add_argument("--environment-receipt")
+    av.add_argument("--replay-spec")
     add("agent-run", "one bounded local external-driver contribution attempt", command={"required": True},
              timeout={"type": float, "default": 900}, daily_attempts={"type": int, "default": 2},
              skip_discovery={"action": "store_true"}, publish={"action": "store_true"})
@@ -431,7 +433,8 @@ def main(argv: list[str] | None = None) -> int:
                   else f"{a.repo}: {r['clean']} clean (need verification), {r['duplicate']} duplicate")
     elif a.cmd == 'environment-replay-pytest':
         try:
-            with repo_research.locked(cfg):
+            with repo_research.locked(cfg), native_replay.publication_locked(cfg):
+                q = Queue(cfg.path("queue.json"))
                 emit(native_replay.replay(cfg, q, a.id, Path(a.receipt_file), Path(a.spec_file), a.timeout))
             return 0
         except (ValueError, OSError, evidence.StaleEvidence, gh.GhError, safety.Blocked) as exc:
@@ -471,9 +474,16 @@ def main(argv: list[str] | None = None) -> int:
             return 1
     elif a.cmd == "agent-verify":
         try:
-            result = driver.complete(q, driver.parse(Path(a.result_file)),
-                                     isolation_mode=cfg.verification_isolation, readonly_paths=cfg.verification_readonly_paths)
-        except (driver.Invalid, environment.Invalid, OSError, evidence.StaleEvidence) as exc:
+            if bool(a.environment_receipt) != bool(a.replay_spec):
+                raise native_replay.Invalid('native completion needs both environment receipt and replay spec')
+            if a.environment_receipt:
+                with repo_research.locked(cfg), native_replay.publication_locked(cfg):
+                    q = Queue(cfg.path("queue.json"))
+                    result = native_replay.complete(cfg, q, driver.parse(Path(a.result_file)), Path(a.environment_receipt), Path(a.replay_spec))
+            else:
+                result = driver.complete(q, driver.parse(Path(a.result_file)),
+                                         isolation_mode=cfg.verification_isolation, readonly_paths=cfg.verification_readonly_paths)
+        except (driver.Invalid, native_replay.Invalid, environment.Invalid, repo_research.Invalid, OSError, evidence.StaleEvidence) as exc:
             print(f"REFUSED: {exc}", file=sys.stderr)
             return 1
         emit(result)

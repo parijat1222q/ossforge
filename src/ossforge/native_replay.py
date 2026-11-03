@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import fcntl
+from contextlib import contextmanager
 import re
 import subprocess
 import uuid
@@ -155,3 +158,148 @@ def replay(cfg: Config, queue: Queue, item_id: str, receipt_file: Path, spec_fil
               'logs': str(folder), 'warning': 'Python pytest editable-source replay only; no queue promotion or publication. Semantic test review and other native checks remain separate.'}
     (folder / 'result.json').write_text(json.dumps(result, indent=2))
     return result
+
+
+def dependencies(clone: Path, rec: dict, result: dict) -> dict:
+    """Bind the actual replay artifacts and prepared runtime for later checks."""
+    folder = environment._plain_path(result['logs'])
+    paths = [Path(result['setup_receipt']), Path(__file__).with_name('pytest_observer.py'),
+             folder / 'result.json', folder / 'baseline-input.json', folder / 'baseline-observation.json',
+             folder / 'fixed-input.json', folder / 'fixed-observation.json']
+    return {'schema': 1, 'clone': str(clone), 'checkout': rec['checkout'],
+            'setup_receipt': result['setup_receipt'], 'replay_result': str(folder / 'result.json'),
+            'runtime': str(Path(rec['environment']) / 'venv'), 'runtime_sha256': rec['runtime_sha256'],
+            'system_inputs': rec['system_inputs'], 'recipe': rec['recipe'],
+            'files': {str(environment._plain_path(str(p))): environment._digest(p) for p in paths}}
+
+
+def check_dependencies(clone: Path, manifest: dict) -> None:
+    """Read-only stale-input checks used by every evidence/publication gate."""
+    keys = {'schema', 'clone', 'checkout', 'setup_receipt', 'replay_result', 'runtime', 'runtime_sha256', 'system_inputs', 'recipe', 'files'}
+    if (not isinstance(manifest, dict) or set(manifest) != keys or manifest.get('schema') != 1
+            or manifest.get('clone') != str(clone) or not isinstance(manifest['files'], dict)
+            or len(manifest['files']) != 7 or not isinstance(manifest['checkout'], dict)):
+        raise Invalid('native replay dependency manifest missing or unsupported')
+    snapshot = manifest['checkout']
+    if environment._source_snapshot(clone, snapshot['base']) != snapshot:
+        raise Invalid('native replay source snapshot changed')
+    if environment._system_inputs() != manifest['system_inputs']:
+        raise Invalid('native replay public CA input changed')
+    environment._validate_recipe(manifest['recipe'], clone)
+    runtime = environment._plain_path(manifest['runtime'])
+    if environment._runtime_digest(runtime) != manifest['runtime_sha256']:
+        raise Invalid('native replay runtime changed')
+    for raw, digest in manifest['files'].items():
+        path = environment._plain_path(raw)
+        if not path.is_file() or environment._digest(path) != digest:
+            raise Invalid('native replay dependency changed: ' + raw)
+    observer = str(Path(__file__).with_name('pytest_observer.py'))
+    result_path = environment._plain_path(manifest['replay_result'])
+    result = environment._read(result_path)
+    folder = result_path.parent
+    expected_files = {str(Path(manifest['setup_receipt'])), observer, str(result_path),
+                      *(str(folder / (phase + suffix)) for phase in ('baseline', 'fixed')
+                        for suffix in ('-input.json', '-observation.json'))}
+    if set(manifest['files']) != expected_files:
+        raise Invalid('native replay artifact dependency set changed')
+    setup = environment._read(Path(manifest['setup_receipt']))
+    if (result.get('status') != 'python_replay_passed' or result.get('setup_receipt') != manifest['setup_receipt']
+            or result.get('setup_receipt_sha256') != manifest['files'][manifest['setup_receipt']]
+            or result.get('observer_sha256') != manifest['files'][observer]
+            or setup.get('checkout') != snapshot or setup.get('clone') != str(clone)
+            or str(Path(setup.get('environment', '')) / 'venv') != str(runtime)
+            or setup.get('runtime_sha256') != manifest['runtime_sha256']
+            or setup.get('system_inputs') != manifest['system_inputs'] or setup.get('recipe') != manifest['recipe']):
+        raise Invalid('native replay result/setup dependency binding changed')
+    spec = result['spec']
+    # Revalidate semantics from the actual hashed files, not a second summary.
+    phase_records = []
+    for phase, revision in [('baseline', snapshot['base']), ('fixed', 'HEAD')]:
+        inputs = environment._read(folder / (phase + '-input.json'))
+        observed = environment._read(folder / (phase + '-observation.json'))
+        modules = {}
+        for name, rel in spec['modules'].items():
+            if revision == 'HEAD':
+                digest = environment._digest(clone / rel)
+            else:
+                blob = subprocess.run(['git', 'show', f'{revision}:{rel}'], cwd=clone, capture_output=True, check=True).stdout
+                digest = hashlib.sha256(blob).hexdigest()
+            modules[name] = {'path': str(clone / rel), 'sha256': digest}
+        rc = 1 if phase == 'baseline' else 0
+        if (not isinstance(inputs.get('nonce'), str) or not inputs['nonce']
+                or inputs.get('modules') != modules or observed.get('schema') != 1
+                or observed.get('nonce') != inputs['nonce'] or observed.get('modules') != modules
+                or observed.get('problems') != [] or observed.get('exit_code') != rc):
+            raise Invalid('native replay actual input/observation binding changed: ' + phase)
+        observed['process_exit'] = rc
+        if observed != result[phase]:
+            raise Invalid('native replay embedded observation differs from actual artifact: ' + phase)
+        phase_records.append(observed)
+    if environment._read(folder / 'baseline-input.json')['nonce'] == environment._read(folder / 'fixed-input.json')['nonce']:
+        raise Invalid('native replay phase nonces must differ')
+    _compare(*phase_records, spec['expected_failures'])
+
+
+@contextmanager
+def publication_locked(cfg: Config):
+    """Exclude replay source restoration from same-state publication effects."""
+    cfg.path('publication.lock').parent.mkdir(parents=True, exist_ok=True)
+    with cfg.path('publication.lock').open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise Invalid('another publication holds this state directory; preserve pending work') from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+
+def complete(cfg: Config, queue: Queue, proposal: dict, receipt_file: Path, spec_file: Path, timeout: int = 600) -> dict:
+    """Run replay now, then normal checks and promote only bound current evidence."""
+    from . import driver, submit
+    item, clone = environment._item(queue, proposal['id'])
+    if proposal.get('outcome') == 'hold':
+        raise Invalid('native replay completion requires a fix proposal, not hold')
+    base = submit._base(str(clone))
+    snapshot = evidence.capture(clone, base, [])
+    if proposal['base'] != base or proposal['branch'] != snapshot['branch']:
+        raise driver.Invalid('native replay proposal base/branch changed')
+    rec = environment.status(cfg, queue, item.id, receipt_file)
+    py = rec['python']
+    # A different interpreter or shell must not silently bypass this runtime.
+    for command in proposal['check_commands']:
+        if command[0] != py:
+            raise Invalid('native replay check commands must use the prepared Python interpreter')
+    spec = _spec(spec_file, clone, base)
+    planned_command = [py, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', *spec['tests']]
+    if proposal['test_command'] != planned_command or proposal['failure_code'] != 1:
+        raise Invalid('proposal test command must match the explicit observed pytest selections')
+    result = replay(cfg, queue, item.id, receipt_file, spec_file, timeout)
+    expected_command = [py, '-m', 'pytest', '-q', '-p', 'no:cacheprovider', *result['spec']['tests']]
+    if proposal['test_command'] != expected_command or proposal['failure_code'] != 1:
+        raise Invalid('proposal test command must match the explicit observed pytest selections')
+    manifest = dependencies(clone, rec, result)
+    check_dependencies(clone, manifest)
+    logs = []
+    for command in proposal['check_commands']:
+        wrapped = environment._setup_wrap(command, clone, [rec['environment']])
+        rc, output = verify._run(wrapped, clone, timeout)
+        logs.append({'command': command, 'exit_code': rc, 'output_tail': output})
+        if rc:
+            raise Invalid('native replay check failed; queue remains clean: ' + output[-500:])
+        check_dependencies(clone, manifest)
+    current = evidence.capture(clone, base, [expected_command, *proposal['check_commands']])
+    if any(current[k] != snapshot[k] for k in ('base', 'tree', 'branch')):
+        raise Invalid('native replay source changed before promotion')
+    current['verification_kind'] = 'python_native_replay'
+    current['native_replay'] = manifest
+    check_dependencies(clone, manifest)
+    queue.set(item.id, status='verified', branch=proposal['branch'], verification=current,
+              issue_title=proposal['issue_title'], issue_body=proposal['issue_body'],
+              pr_title=proposal['pr_title'], pr_body=proposal['pr_body'], consent_issue=proposal['consent_issue'])
+    queue.save()
+    return {'schema': 1, 'status': 'verified', 'id': item.id, 'evidence': current,
+            'checks': logs, 'replay_logs': result['logs'],
+            'next': 'submit remains separate; dependency checks repeat before public effects'}

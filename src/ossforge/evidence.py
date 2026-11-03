@@ -35,3 +35,14 @@ def check(clone: Path, base: str, branch: str, receipt: dict) -> None:
     current = capture(clone, base, receipt["commands"])
     if any(current[k] != receipt.get(k) for k in ("base", "tree", "branch")) or current["branch"] != branch:
         raise StaleEvidence("verification evidence no longer matches tree, base or branch; re-run verify")
+
+    if 'verification_kind' in receipt and receipt['verification_kind'] != 'python_native_replay':
+        raise StaleEvidence('unknown verification kind; re-run supported verification')
+    if receipt.get('verification_kind') == 'python_native_replay' or 'native_replay' in receipt:
+        from . import native_replay
+        if receipt.get('verification_kind') != 'python_native_replay' or not receipt.get('native_replay'):
+            raise StaleEvidence('native replay dependency evidence missing; re-run verification')
+        try:
+            native_replay.check_dependencies(clone, receipt['native_replay'])
+        except (ValueError, OSError, KeyError, TypeError, RuntimeError, subprocess.SubprocessError) as exc:
+            raise StaleEvidence('native replay evidence stale: ' + str(exc)) from exc
