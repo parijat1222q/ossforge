@@ -52,9 +52,9 @@ def setup(tmp_path, monkeypatch):
 def available(source):
     if not shutil.which('bwrap'):
         pytest.skip('bubblewrap unavailable')
-    p = subprocess.run(environment.isolation.wrap(['/usr/bin/true'], source, 'bwrap', []), capture_output=True)
+    p = subprocess.run(environment.isolation.wrap(['/usr/bin/python3', '-c', 'import venv,ensurepip'], source, 'bwrap', []), capture_output=True)
     if p.returncode:
-        pytest.skip('kernel namespaces unavailable')
+        pytest.skip('namespace or system Python venv/ensurepip unavailable: ' + p.stderr.decode()[-300:])
 
 
 def test_public_cli_native_setup_and_status_preserve_checkout(setup, capsys, tmp_path):
@@ -121,7 +121,7 @@ def test_failure_retains_logs_without_receipt(setup):
     data['commands'] = [['{python}', '-c', 'raise SystemExit(3)']]
     path.write_text(json.dumps(data))
     out = environment.prepare(cfg, q, 'i', path)
-    assert out['status'] == 'environment_failed' and out['exit_code'] == 3
+    assert out['status'] == 'environment_failed' and out['exit_code'] == 3, out
     assert not (Path(out['logs']) / 'receipt.json').exists()
     assert q.items['i'].status == 'clean' and git(source, 'status', '--porcelain') == ''
 
@@ -200,3 +200,18 @@ def test_hidden_tracked_modification_invalidates_existing_receipt(setup, flag):
     assert git(source, 'status', '--porcelain') == ''
     with pytest.raises(environment.Invalid, match='hidden index flags'):
         environment.status(cfg, q, 'i', Path(out['receipt_file']))
+
+
+def test_missing_system_venv_refused_before_output_no_fallback(setup, monkeypatch):
+    cfg, q, source, path, data = setup
+    original = environment.subprocess.run
+    def run(command, *a, **kw):
+        if command[0] == 'git':
+            return original(command, *a, **kw)
+        assert command[-1] == 'import venv,ensurepip'
+        return subprocess.CompletedProcess(command, 1, '', 'ModuleNotFoundError: ensurepip')
+    monkeypatch.setattr(environment.isolation.shutil, 'which', lambda *a: '/usr/bin/bwrap')
+    monkeypatch.setattr(environment.subprocess, 'run', run)
+    with pytest.raises(environment.Invalid, match='ensurepip.*no host fallback'):
+        environment.prepare(cfg, q, 'i', path)
+    assert not (Path(cfg.work_dir) / 'environments').exists()
