@@ -934,3 +934,32 @@ def test_explicit_repository_base_reaches_actual_pr_argv(world, branch):
     assert pr[pr.index('--base')+1]==branch
     assert sh('git','rev-parse',branch,cwd=world['up'])==base
     assert '--base' in pr and 'me:fix/x' in pr
+
+
+@pytest.mark.parametrize('setting,docs,expected', [
+    (True, {}, True),
+    ('auto', {'AI_POLICY.md': 'You must disclose AI use.'}, True),
+    ('auto', {}, False),
+    (False, {}, False),
+])
+def test_disclosure_in_issue_and_pr_does_not_invent_human_review(world, setting, docs, expected):
+    # Exercise the publication bodies, not only the disclosure constant or plan.
+    world['cfg'].disclosure = setting
+    world['mp'].setattr(submit, '_policy_files', lambda *a, **kw: docs)
+    result = run(world, execute=True)
+    assert result['disclosure_added'] is expected
+    bodies = [args[args.index('-b') + 1] for args in writes(world['log'])
+              if args[:2] in (['issue', 'create'], ['pr', 'create'])]
+    assert len(bodies) == 2
+    for body in bodies:
+        assert 'reviewed by a human' not in body
+        assert ('This issue/PR was prepared with AI assistance.' in body) is expected
+
+
+def test_factual_disclosure_does_not_override_mandatory_policy(world):
+    world['cfg'].disclosure = False
+    world['mp'].setattr(submit, '_policy_files', lambda *a, **kw: {
+        'AI_POLICY.md': 'You must disclose AI use.'})
+    with pytest.raises(submit.Refused, match='asks for AI disclosure'):
+        run(world, execute=True)
+    assert writes(world['log']) == []
