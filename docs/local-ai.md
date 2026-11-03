@@ -458,8 +458,14 @@ config to resume, or explicitly start a new session after expiry; never silently
 reset the budget to escape configuration drift. An expired session
 needs `research-session --new --seconds SECONDS` to start another, preserving the
 previous record in history. The IDE must not silently renew a user's allowance.
-Local source investigation and native verification are separate from repository
-search; an expired budget does not discard a checkout, queue or saved issue batch.
+Repository search includes selection, refresh and the initial `research-repo
+--begin`, because begin performs fresh repository/policy/health reads before
+creating or inspecting a checkout. A selected or policy-reviewed repository is
+not yet an already-started investigation. If time expires before begin succeeds,
+preserve that lead and report the boundary; do not silently renew the allowance.
+Only an already-started investigation with a preserved checkout, and native
+verification, are separate from repository search. Expiry does not discard a
+checkout, queue or saved issue batch.
 No schedule, daemon or model call is started. Per-command read pacing/cooldowns
 still apply inside the remaining session budget.
 Saved issue batches and issue cursors are not modified by repository research.
