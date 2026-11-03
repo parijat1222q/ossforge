@@ -470,7 +470,13 @@ Follow `agent-next` as usual:
   health, outside-contributor merge sample, current source revision and
   policy documents. Read the evidence and its limitations. Popularity, a health
   score or a prior outside merge is not permission or proof that useful work
-  exists. Evaluate native-test feasibility and linked external contribution
+  exists. For code sessions, broad discovery places repositories whose search
+  descriptions/topics explicitly identify resource lists or interview-preparation
+  collections later within the same thirty-result page. This is a ranking hint,
+  not an exclusion or code-suitability verdict: unknown layouts stay available,
+  every collection remains reachable in later windows, and source/test evidence
+  still needs review. Issue-only discovery keeps its original order.
+  Evaluate native-test feasibility and linked external contribution
   pages too. Record the normal source-backed policy review. Defer unsuitable
   work with `research-repo --defer "specific reason"`. This advances only the
   independent repository research cursor. An incomplete read retains the selected
