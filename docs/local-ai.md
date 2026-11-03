@@ -883,3 +883,30 @@ timeout. State replacement flushes file data and its containing directory;
 OS/filesystem failure still limits durability. If replacement became visible
 before directory flush failed, an exact token retry treats that visible committed
 record as authoritative and never rolls it back or allocates a second clone.
+
+### Policy-bound external Python regression (opt-in)
+
+The normal verifier still requires changed source and tracked regression tests.
+If a current repository rule forbids changing code and doctests together, review
+that exact policy document, then record `policy-review REPO --accept
+--external-regression-doc AGENTS.md --note 'source-backed reason'` (use the real
+policy path). This is an explicit reviewed exception for test delivery, never
+permission to ignore repository rules or publish.
+
+`agent-verify RESULT.json --external-regression` accepts an exact two-element
+`test_command`: absolute Python interpreter and absolute external script. The
+product freezes the script into its configured state directory, observes imports
+of every changed Python source file from the checkout, requires real baseline
+failure and patched success, uses a fresh private bytecode-cache prefix for every
+run (removed only after confirmed worker cleanup), and retains source/policy/interpreter/artifact
+bindings for every later evidence gate. Initial support is existing Python source
+files and a single stdlib/checkout-only script. Keep unchanged repository-native
+checks in `check_commands`. Do not combine this with native environment replay.
+
+This is a freshness check, not a sandbox, anti-tamper signature or proof that a
+regression is meaningful. Review the actual script and failure. Interpreter
+identity is checked, but imported standard-library/native dependencies are not a
+hermetic environment. No automatic fallback or upgrade of old receipts exists.
+Keep the actual portable reproduction and tested scope in the PR body when the
+repository forbids a test-file change. Publication remains a separate authorized
+step with current policy, identity, duplicate and source-base checks.

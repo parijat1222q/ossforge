@@ -45,7 +45,17 @@ def check(clone: Path, base: str, branch: str, receipt: dict, *, contribution_ba
     if any(current[k] != receipt.get(k) for k in ("base", "tree", "branch")) or current["branch"] != branch:
         raise StaleEvidence("verification evidence no longer matches tree, base or branch; re-run verify")
 
-    if 'verification_kind' in receipt and receipt['verification_kind'] != 'python_native_replay':
+    if receipt.get('verification_kind') == 'python_external_regression' or 'external_regression' in receipt:
+        if cfg is None or receipt.get('verification_kind') != 'python_external_regression':
+            raise StaleEvidence('external regression policy context missing')
+        from . import external_regression
+        try:
+            external_regression.check(cfg, clone, receipt['external_regression'])
+            if receipt['commands'][0] != receipt['external_regression']['command']:
+                raise ValueError('external regression command receipt changed')
+        except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError) as exc:
+            raise StaleEvidence('external regression evidence stale: ' + str(exc)) from exc
+    if 'verification_kind' in receipt and receipt['verification_kind'] not in {'python_native_replay', 'python_external_regression'}:
         raise StaleEvidence('unknown verification kind; re-run supported verification')
     if receipt.get('verification_kind') == 'python_native_replay' or 'native_replay' in receipt:
         from . import native_replay

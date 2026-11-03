@@ -59,4 +59,4 @@ jobs:
           tests/test_runs.py tests/test_repo_research.py tests/test_research_continuation.py
           tests/test_agent_next.py tests/test_agent_run.py tests/test_verify_commit.py
           tests/test_contribution_base.py tests/test_driver.py tests/test_driver_hold.py
-          tests/test_dedupe_queue.py
+          tests/test_dedupe_queue.py tests/test_external_regression.py

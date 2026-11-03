@@ -85,6 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
     prv.add_argument("--publication-route", choices=["issue_pr", "pr_only", "issue_first", "unresolved"], help="source-backed route after reading contribution rules; not owner consent")
     prv.add_argument("--extra-path", action="append", default=[], help="exact linked in-repository contribution file to pin and recheck")
     prv.add_argument("--local-preparation", choices=["allowed", "forbidden", "unresolved"], default="unresolved", help="source-scoped local modification decision, never public permission")
+    prv.add_argument("--external-regression-doc", help="explicit reviewed policy document requiring external test delivery; not inferred permission")
     prv.add_argument("--note", default="", help="restrictions that apply, in your words")
     dr = add("review-duplicate", "record one reviewed false positive for this exact verified candidate", "id")
     dr.add_argument("number", type=int)
@@ -133,6 +134,7 @@ def build_parser() -> argparse.ArgumentParser:
     nr = add("environment-replay-pytest", "bounded Python pytest replay; never promote or publish", "id", "receipt_file", "spec_file")
     nr.add_argument("--timeout", type=int, default=600)
     av = add("agent-verify", "validate external-driver result and rerun tests; never publish", "result_file")
+    av.add_argument("--external-regression", action="store_true", help="explicit source-policy-bound external Python regression")
     av.add_argument("--environment-receipt")
     av.add_argument("--replay-spec")
     add("agent-run", "one bounded local external-driver contribution attempt", command={"required": True},
@@ -363,7 +365,7 @@ def _main(argv: list[str] | None = None, *, _state_locked: bool = False, _reques
                 if not a.note.strip():
                     print("--note is required: state the restrictions that apply (or 'none found after reading X')")
                     return 2
-                rec = policy_review.record(cfg, a.repo, snap, a.note, prohibited=a.prohibited, publication_route=a.publication_route, local_preparation=a.local_preparation, contribution_branch=a.contribution_branch)
+                rec = policy_review.record(cfg, a.repo, snap, a.note, prohibited=a.prohibited, publication_route=a.publication_route, local_preparation=a.local_preparation, contribution_branch=a.contribution_branch, external_regression_doc=a.external_regression_doc)
                 print("recorded:", json.dumps({k: v for k, v in rec.items() if k != "docs"}), f"{len(rec['docs'])} doc(s) pinned")
             else:
                 print(f"{a.repo}: {len(snap['docs'])} policy-bearing doc(s) found in the scanned locations; anti-AI wording: {snap['anti_ai']}")
@@ -540,6 +542,8 @@ def _main(argv: list[str] | None = None, *, _state_locked: bool = False, _reques
             return 1
     elif a.cmd == "agent-verify":
         try:
+            if a.external_regression and (a.environment_receipt or a.replay_spec):
+                raise native_replay.Invalid("external regression cannot combine with native replay")
             if bool(a.environment_receipt) != bool(a.replay_spec):
                 raise native_replay.Invalid('native completion needs both environment receipt and replay spec')
             if a.environment_receipt:
@@ -549,8 +553,8 @@ def _main(argv: list[str] | None = None, *, _state_locked: bool = False, _reques
                     result = native_replay.complete(cfg, q, driver.parse(Path(a.result_file)), Path(a.environment_receipt), Path(a.replay_spec))
             else:
                 result = driver.complete(q, driver.parse(Path(a.result_file)),
-                                         isolation_mode=cfg.verification_isolation, readonly_paths=cfg.verification_readonly_paths)
-        except (driver.Invalid, native_replay.Invalid, environment.Invalid, repo_research.Invalid, OSError, evidence.StaleEvidence) as exc:
+                                         isolation_mode=cfg.verification_isolation, readonly_paths=cfg.verification_readonly_paths, cfg=cfg, external_mode=a.external_regression)
+        except (ValueError, driver.Invalid, native_replay.Invalid, environment.Invalid, repo_research.Invalid, OSError, evidence.StaleEvidence) as exc:
             print(f"REFUSED: {exc}", file=sys.stderr)
             return 1
         emit(result)

@@ -101,7 +101,7 @@ def parse(path: Path) -> dict:
     return cb.bind(data, selected)
 
 
-def complete(queue: Queue, result: dict, *, isolation_mode: str = "none", readonly_paths: list[str] | None = None) -> dict:
+def complete(queue: Queue, result: dict, *, isolation_mode: str = "none", readonly_paths: list[str] | None = None, cfg=None, external_mode: bool = False) -> dict:
     if 'commit_message' in result:
         raise Invalid('commit_message is agent-run only; standalone completion requires an already committed patch')
     item = queue.items.get(result['id'])
@@ -129,7 +129,14 @@ def complete(queue: Queue, result: dict, *, isolation_mode: str = "none", readon
                 'next': 'resolve prerequisite before explicit unhold; independent discovery may continue'}
     if current['branch'] != result['branch']:
         raise Invalid('result branch does not match active checkout')
-    outcome = verify.verify_fix(clone, base, Path('unused'), [], test_command=result['test_command'],
+    external = None
+    if external_mode:
+        if cfg is None:
+            raise Invalid('external regression needs policy context')
+        from . import external_regression
+        external = external_regression.freeze(cfg, item.repo, clone, result['test_command'], base)
+        result = {**result, 'test_command': external['command']}
+    outcome = verify.verify_fix(clone, base, Path('unused'), [], test_command=result['test_command'], external=external, cfg=cfg,
                                 check_commands=result['check_commands'], failure_code=result['failure_code'], isolation_mode=isolation_mode, readonly_paths=readonly_paths, **({"contribution_base": selected} if selected else {}))
     if not outcome.ok:
         return {'schema': 1, 'status': 'verification_failed', 'id': item.id, 'log': outcome.log}
