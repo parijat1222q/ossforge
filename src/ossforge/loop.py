@@ -23,7 +23,7 @@ MAX_REPOS_PER_PASS = 4
 
 def run_once(cfg: Config, progress=None) -> list[str]:
     try:
-        with runs.Run(Path(cfg.state_dir), progress) as run:
+        with runs.Run(Path(cfg.state_dir), progress, before_journal=lambda: _pending_guard(cfg)) as run:
             return _run_once(cfg, run)
     except runs.Busy as exc:
         return [f"halted: {exc}"]
@@ -40,6 +40,8 @@ class Notes(list):
 
 
 def _run_once(cfg: Config, run) -> list[str]:
+    from . import research_continuation
+    research_continuation.guard(cfg)
     notes = Notes(run)
     try:
         safety.kill_switch(cfg)
@@ -212,3 +214,8 @@ def run_forever(cfg: Config, interval_s: int) -> None:
         if Path(cfg.kill_file).exists():
             return
         time.sleep(interval_s)
+
+
+def _pending_guard(cfg):
+    from . import research_continuation
+    research_continuation.guard(cfg)

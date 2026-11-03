@@ -159,3 +159,138 @@ def test_prior_day_attempt_count_rolls_over(tmp_path):
     path.write_text(json.dumps({'day': (date.today() - timedelta(days=1)).isoformat(), 'count': 20}))
     assert agent_run.run(cfg, ['missing-driver'], discover=False, attempts=1)['status'] == 'driver_error'
     assert json.loads(path.read_text()) == {'day': date.today().isoformat(), 'count': 1}
+
+
+def parent_commit_fixture(tmp_path,monkeypatch):
+    cfg,command = fixture(tmp_path)
+    cfg.github_user,cfg.git_name,cfg.git_email = 'test','Test','test@example.invalid'
+    q = Queue(cfg.path('queue.json'))
+    clone = Path(q.items['a'].clone)
+    subprocess.run(['git','remote','add','origin','https://github.com/owner/repo'],cwd=clone,check=True)
+    monkeypatch.setattr(agent_run.identity,'check_login',lambda c:[])
+    monkeypatch.setattr(agent_run.policy_review,'check',lambda *a:'')
+    monkeypatch.setattr(agent_run.policy_review,'publication_route',lambda *a:'issue_pr')
+    # Real child edits, creates branch and returns a parent-owned commit request.
+    script = Path(command[1])
+    script.write_text('''import json,os,sys,subprocess
+from pathlib import Path
+t=json.loads(Path(os.environ['OSSFORGE_TASK_FILE']).read_text())
+subprocess.run(['git','switch','-c','next-fix'],check=True,capture_output=True)
+Path('calc.py').write_text('def f(n): return n*3\\n')
+Path('test_calc.py').write_text('from calc import f\\nassert f(3)==9\\n')
+r=t['result_schema'];r.update(branch='next-fix',test_command=[sys.executable,'test_calc.py'],check_commands=[],commit_message='second real fix',commit_paths=['calc.py','test_calc.py'])
+Path(os.environ['OSSFORGE_RESULT_FILE']).write_text(json.dumps(r))
+''')
+    return cfg,command,clone
+
+
+def test_actual_child_patch_parent_identity_commit_actual_verification(tmp_path,monkeypatch):
+    cfg,command,clone = parent_commit_fixture(tmp_path,monkeypatch)
+    before = subprocess.check_output(['git','rev-parse','HEAD'],cwd=clone,text=True).strip()
+    out = agent_run.run(cfg,command,discover=False)
+    assert out['status'] == 'verified_not_submitted'
+    head = subprocess.check_output(['git','rev-parse','HEAD'],cwd=clone,text=True).strip()
+    assert head != before
+    journal = json.loads(cfg.path('run.json').read_text())
+    assert head.startswith(journal['driver_commit']['head'])
+    assert Queue(cfg.path('queue.json')).items['a'].status == 'verified'
+    assert subprocess.check_output(['git','status','--porcelain'],cwd=clone,text=True) == ''
+
+
+@pytest.mark.parametrize('case',['wrong_branch','wrong_base','invalid_message','stop','identity','verify_failure','unrelated'])
+def test_parent_commit_refusal_or_failed_verify_preserves_patch(tmp_path,monkeypatch,case):
+    cfg,command,clone = parent_commit_fixture(tmp_path,monkeypatch)
+    before = subprocess.check_output(['git','rev-parse','HEAD'],cwd=clone,text=True).strip()
+    script=Path(command[1])
+    text=script.read_text()
+    if case == 'wrong_branch':
+        text=text.replace("branch='next-fix'","branch='not-current'")
+    elif case == 'wrong_base':
+        text=text.replace("r=t['result_schema'];r.update", "r=t['result_schema'];r['base']='wrong';r.update")
+    elif case == 'invalid_message':
+        text=text.replace("commit_message='second real fix'","commit_message=''")
+    elif case == 'stop':
+        text += f'Path({cfg.kill_file!r}).write_text("stop")\n'
+    elif case == 'identity':
+        monkeypatch.setattr(agent_run.identity,'check_login',lambda c:['wrong account'])
+    elif case == 'verify_failure':
+        text=text.replace('assert f(3)==9','assert f(3)==123')
+    elif case == 'unrelated':
+        text+='Path("unrelated.txt").write_text("keep")\n'
+    script.write_text(text)
+    if case == 'verify_failure':
+        out=agent_run.run(cfg,command,discover=False)
+        assert out['status'] == 'verification_failed'
+        journal=json.loads(cfg.path('run.json').read_text())
+        assert journal['driver_commit']['head']
+    else:
+        with pytest.raises((driver.Invalid,agent_run.identity.IdentityError,agent_run.safety.Blocked)):
+            agent_run.run(cfg,command,discover=False)
+        assert subprocess.check_output(['git','rev-parse','HEAD'],cwd=clone,text=True).strip() == before
+    assert Queue(cfg.path('queue.json')).items['a'].status == 'clean'
+    assert 'return n*3' in (clone/'calc.py').read_text()
+
+
+def test_parent_commit_failure_preserves_staged_index_and_unpromoted_queue(tmp_path,monkeypatch):
+    cfg,command,clone=parent_commit_fixture(tmp_path,monkeypatch)
+    # Make git commit itself fail after staging without changing global config.
+    hook=clone/'.git/hooks/pre-commit'
+    hook.write_text('#!/bin/sh\nexit 1\n')
+    hook.chmod(0o755)
+    before=subprocess.check_output(['git','rev-parse','HEAD'],cwd=clone,text=True).strip()
+    with pytest.raises(agent_run.identity.IdentityError):
+        agent_run.run(cfg,command,discover=False)
+    assert subprocess.check_output(['git','rev-parse','HEAD'],cwd=clone,text=True).strip() == before
+    assert set(subprocess.check_output(['git','diff','--cached','--name-only'],cwd=clone,text=True).splitlines()) == {'calc.py','test_calc.py'}
+    assert Queue(cfg.path('queue.json')).items['a'].status == 'clean'
+
+
+def test_restart_after_parent_commit_before_verification_preserves_commit(tmp_path,monkeypatch):
+    cfg,command,clone=parent_commit_fixture(tmp_path,monkeypatch)
+    real=driver.complete
+    monkeypatch.setattr(driver,'complete',lambda *a,**k:(_ for _ in ()).throw(OSError('crash after parent commit')))
+    with pytest.raises(OSError,match='crash after'):
+        agent_run.run(cfg,command,discover=False)
+    journal=json.loads(cfg.path('run.json').read_text())
+    commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=clone,text=True).strip()
+    assert commit.startswith(journal['driver_commit']['head'])
+    monkeypatch.setattr(driver,'complete',real)
+    # A separately inspected already-committed result uses the original schema.
+    result_file=next(cfg.path('driver-jobs').glob('*/result.json'))
+    result=json.loads(result_file.read_text())
+    result.pop('commit_message')
+    result.pop('commit_paths')
+    checked=driver.complete(Queue(cfg.path('queue.json')),result)
+    assert checked['status'] == 'verified'
+    assert subprocess.check_output(['git','rev-parse','HEAD'],cwd=clone,text=True).strip() == commit
+
+
+def test_standalone_public_commit_success_remains_supported(tmp_path,monkeypatch,capsys):
+    from ossforge import cli
+    cfg,command,clone=parent_commit_fixture(tmp_path,monkeypatch)
+    (clone/'calc.py').write_text('def f(n): return n*4\n')
+    config=tmp_path/'cfg.yaml'
+    config.write_text(f'state_dir: {cfg.state_dir}\nkill_file: {cfg.kill_file}\ngithub_user: test\ngit_name: Test\ngit_email: test@example.invalid\n')
+    assert cli.main(['--config',str(config),'commit','a','-m','standalone identity checked']) == 0
+    assert subprocess.check_output(['git','log','-1','--format=%s'],cwd=clone,text=True).strip() == 'standalone identity checked'
+
+
+def test_crash_after_git_commit_before_journal_does_not_undo_or_duplicate(tmp_path,monkeypatch):
+    cfg,command,clone=parent_commit_fixture(tmp_path,monkeypatch)
+    real=agent_run.runs.Run.note
+    def crash(self,text):
+        if text.startswith('parent identity-checked commit'):
+            raise OSError('journal persistence interrupted')
+        return real(self,text)
+    monkeypatch.setattr(agent_run.runs.Run,'note',crash)
+    with pytest.raises(OSError,match='journal persistence'):
+        agent_run.run(cfg,command,discover=False)
+    head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=clone,text=True).strip()
+    assert subprocess.check_output(['git','log','-1','--format=%s'],cwd=clone,text=True).strip() == 'second real fix'
+    assert Queue(cfg.path('queue.json')).items['a'].status == 'clean'
+    # Explicitly inspect and complete the committed legacy result, never rerun child.
+    result=json.loads(next(cfg.path('driver-jobs').glob('*/result.json')).read_text())
+    result.pop('commit_message')
+    result.pop('commit_paths')
+    assert driver.complete(Queue(cfg.path('queue.json')),result)['status'] == 'verified'
+    assert subprocess.check_output(['git','rev-parse','HEAD'],cwd=clone,text=True).strip() == head

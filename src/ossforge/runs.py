@@ -14,12 +14,15 @@ class Busy(RuntimeError):
 
 
 class Run:
-    def __init__(self, root: Path, emit=None):
+    def __init__(self, root: Path, emit=None, before_journal=None):
         self.root, self.emit = Path(root), emit
+        self.before_journal = before_journal
         self.lock = None
         self.data = {}
 
     def __enter__(self):
+        if any(p.is_symlink() for p in (self.root / 'run.lock', *self.root.parents)) or self.root.is_symlink():
+            raise Busy('symlink state lock path; preserve it')
         self.root.mkdir(parents=True, exist_ok=True)
         self.lock = (self.root / 'run.lock').open('a')
         try:
@@ -27,6 +30,13 @@ class Run:
         except BlockingIOError as exc:
             self.lock.close()
             raise Busy('another run holds this state directory') from exc
+        try:
+            if self.before_journal:
+                self.before_journal()
+        except BaseException:
+            fcntl.flock(self.lock, fcntl.LOCK_UN)
+            self.lock.close()
+            raise
         try:
             old = json.loads((self.root / 'run.json').read_text())
         except (OSError, ValueError):

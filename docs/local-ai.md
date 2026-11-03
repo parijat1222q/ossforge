@@ -74,7 +74,8 @@ Do not start a nested model process just because you are already an AI assistant
 > - work_candidate: use the task's clean clone/base, inspect code and upstream
 >   issues/PRs/commits, then reproduce a real defect before editing. Follow target
 >   policy, prepare identity, add a regression and minimal fix on a named branch,
->   and commit with ossforge commit. Produce the task's exact schema-1 result and
+>   and commit with ossforge commit in a standalone IDE session (not a child of
+>   agent-run). Produce the task's exact schema-1 result and
 >   run agent-verify. For the supported prepared Python/pytest source route,
 >   follow the paired receipt/spec completion below, not plain generic argv.
 >   Read failure logs; missing dependencies are not bug proof.
@@ -185,6 +186,29 @@ are discarded, so progress should be written to operator-owned local logs withou
 secrets. A wrapper must deliberately handle its assistant's normal local auth and
 permissions. No Claude-specific wrapper or user's installed driver has been
 validated here; do not copy subscription tokens into this interface.
+
+The runner holds the state-run lock through the child and verification. Its
+supported child contract is patch/result only: do not call state-mutating
+`ossforge` commands (`commit`, `prepare`, `verify`, `hold`, another runner or
+research commands) inside it. Such callbacks now refuse as busy. This explicitly
+replaces the earlier implicit nested-CLI expectation; no environment bypass or
+inherited lock capability is supported. Standalone IDE sessions still use
+`ossforge commit` normally. `patch_command` hooks also draft patches only, with
+manual commit/verification after the loop exits.
+
+For an uncommitted fix, add both `commit_message` (nonempty text, at most 4000
+characters, no NUL) and `commit_paths` (1..30 distinct exact repository files) to
+the schema-1 fix result. The parent checks current queue, source root, original
+HEAD/tree/base, named branch, policy, identity, STOP and exact changed paths,
+then commits only those paths using the existing identity gate. It records the
+commit before verification. Holds cannot request commits. An already committed
+fix keeps the original result without these fields; there is no empty commit or
+automatic commit in standalone `agent-verify` or native replay. On commit or
+verification failure, preserve the checkout/index and inspect the run journal;
+no verified state or retry success is implied. Unrelated/generated changes
+refuse, rather than being silently included. Trusted drivers must terminate all
+descendants before returning; detached descendants are unsupported. This is not
+process isolation.
 
 `--timeout` defaults to 900 seconds and allows 1..3600; the driver process group is
 killed on timeout. This is not a whole-run deadline: discovery, verification and
@@ -767,3 +791,57 @@ replay still independently requires the named baseline regression assertions
 and fixed passes, but the operator must select the repository's real required
 checks. Unknown explicit verification kinds refuse; older generic receipts
 without a kind retain their existing source-tree-only semantics.
+
+## Another investigation on the same selected source
+
+`research-repo --another-investigation TOKEN` is an explicit same-selected-source
+continuation, not a repository search allowance or permission to publish. It
+preserves the old lead, checkout, queue, review bytes and search deadline/cursors.
+A fresh independent checkout is pinned after current policy/access/native checks.
+The token is 1..80 letters, digits, underscores or hyphens. Retry that exact token
+after inspecting any partial clone; do not delete/reset it or change the request.
+A pending checkpoint blocks other mutations except STOP/resume and exact retry.
+A committed retry returns its saved outcome without searching or cloning again.
+The single durable state replacement archives the old lead and exact review bytes,
+promotes the new research identity and records the token result together. Source
+review contexts include that identity even when the SHA did not change. No old
+unbound submission is retroactively attributed to the new investigation.
+
+If the pinned tip/policy or local inputs drift, the same pending token refuses
+rather than repinning. After inspection, use `research-repo
+--abandon-investigation TOKEN --reason 'source-backed reason'`. This atomically
+archives the original pending snapshots and separately observed current inputs,
+leaves the current lead/review/search/queue and partial clone untouched, and burns
+that token with a distinct abandoned outcome. It is not successful investigation.
+Malformed pending records still need manual inspection; they are not adopted.
+
+`research-repo --reconcile-run --reason 'inspection and remaining uncertainty'`
+can record inspection of the exact current failed journal only when no driver
+lifetime, active work, partial publication, changed checkout or preparation hold
+remains. Historical failed journals are preserved, not permanent blockers. The
+acknowledgement is invalidated by any current-journal change. It does not certify
+remote outcomes, detached-child termination or checkout safety, and does not
+change queue/publication status or suppress their checkpoint priority. STOP and
+normal locks still apply. A potentially live child cannot be acknowledged away.
+
+The parent-owned runner commit currently supports modified/added regular files,
+not deletions or renames. Keep already committed schema-1 results for those cases,
+or use a standalone IDE commit. Any commit that succeeds before a crash remains
+in Git even if its journal write fails. Preserve and inspect HEAD, index and the
+assigned task/result, then use an inspected already-committed result for separate
+verification. Do not rerun the driver or request another automatic commit over an
+uncertain result. A journal acknowledgement cannot certify a possible child exit.
+
+Some interrupted states remain blocked. A timeout or launch error without a
+trusted child-exit record cannot be cleared by a reason string. Detached children
+are unsupported. A clone interrupted before identity setup may remain unusable
+on exact retry, which does not rewrite its config automatically; preserve it and
+use the explicit abandon route before a new token. A current stable repository
+ID is evidence about the current source, not proof of historical ownership.
+
+The read budget is cooperative, checked again immediately before promotion. It
+is not hard cancellation of Git clone: that process has its own 300-second
+timeout. State replacement flushes file data and its containing directory;
+OS/filesystem failure still limits durability. If replacement became visible
+before directory flush failed, an exact token retry treats that visible committed
+record as authoritative and never rolls it back or allocates a second clone.

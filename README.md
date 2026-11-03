@@ -415,7 +415,10 @@ assistant starting prompt and the limits. This is a local driver interface, not 
 claim that an unattended external-model contribution has been validated.
 
 `agent-run --command '/path/to/local-driver'` optionally coordinates one bounded
-external-command attempt and actual verification. Publication is off unless
+external-command attempt and actual verification. The child writes patch/result
+only, not nested mutating CLI calls. Optional `commit_message` plus exact
+`commit_paths` request a parent-owned identity-checked commit before verification;
+legacy already-committed results still work. Publication is off unless
 `--publish` is explicitly authorized. See the local workflow for the JSON-file
 contract, timeout/daily-attempt semantics, recovery and security limitations.
 It is not a token budget, sandbox, cloud service or validated Claude adapter.
