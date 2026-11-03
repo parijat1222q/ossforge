@@ -56,7 +56,7 @@ def available(source):
         reason = 'bubblewrap unavailable'
     else:
         try:
-            p = subprocess.run(environment.isolation.wrap(['/usr/bin/python3', '-m', 'venv', '/tmp/ossforge-probe'], source, 'bwrap', []), capture_output=True, timeout=30)
+            p = subprocess.run(environment.isolation.wrap(['/usr/bin/python3', '-c', environment.PROBE], source, 'bwrap', []), capture_output=True, timeout=30)
             if p.returncode:
                 reason = 'system venv probe failed: ' + (p.stdout + p.stderr).decode()[-1200:]
         except (OSError, subprocess.TimeoutExpired) as exc:
@@ -218,7 +218,7 @@ def test_missing_system_venv_refused_before_output_no_fallback(setup, monkeypatc
     def run(command, *a, **kw):
         if command[0] == 'git':
             return original(command, *a, **kw)
-        assert command[-3:] == ['-m', 'venv', '/tmp/ossforge-probe']
+        assert command[-2:] == ['-c', environment.PROBE]
         return subprocess.CompletedProcess(command, 1, '', 'ModuleNotFoundError: ensurepip')
     monkeypatch.setattr(environment.isolation.shutil, 'which', lambda *a: '/usr/bin/bwrap')
     monkeypatch.setattr(environment.subprocess, 'run', run)

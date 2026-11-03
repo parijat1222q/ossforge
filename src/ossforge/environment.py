@@ -21,6 +21,10 @@ class Invalid(ValueError):
     pass
 
 
+# Split creation from seeding so ensurepip's actual stderr is not hidden by venv.
+PROBE = "import venv,subprocess,sys;venv.EnvBuilder(with_pip=False).create('/tmp/ossforge-probe');sys.exit(subprocess.call(['/tmp/ossforge-probe/bin/python','-m','ensurepip','--upgrade','--default-pip']))"
+
+
 def _digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -128,7 +132,7 @@ def prepare(cfg: Config, queue: Queue, item_id: str, recipe_file: Path, timeout:
         raise Invalid('environment root must not have symlink ancestors')
     # Check kernel support before creating a setup workspace.
     try:
-        probe = subprocess.run(isolation.wrap(['/usr/bin/python3', '-m', 'venv', '/tmp/ossforge-probe'], clone, 'bwrap', []),
+        probe = subprocess.run(isolation.wrap(['/usr/bin/python3', '-c', PROBE], clone, 'bwrap', []),
                                capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise Invalid('setup runtime/namespace probe unavailable; no host fallback: ' + str(exc)) from exc
