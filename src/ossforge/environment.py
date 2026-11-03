@@ -107,8 +107,33 @@ def _item(queue: Queue, item_id: str, *, inspect: bool = False):
     return item, clone
 
 
+# Debian's system pip imports requests, which eagerly reads this public CA bundle
+# even for offline ensurepip. No other /etc input is exposed by setup.
+CA_BUNDLE = Path('/etc/ssl/certs/ca-certificates.crt')
+
+
+def _system_inputs() -> dict[str, str]:
+    try:
+        if not CA_BUNDLE.exists() and not CA_BUNDLE.is_symlink():
+            return {}
+        path = _plain_path(str(CA_BUNDLE))
+        if not path.is_file() or path.stat().st_size > 4 * 1024 * 1024:
+            raise Invalid('system CA bundle is not a bounded regular file')
+        content = path.read_text()
+        blocks = re.findall(r'-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----', content)
+        if not blocks or ''.join(content.split()) != ''.join(''.join(blocks).split()):
+            raise Invalid('system CA input must contain only public certificate blocks')
+        return {str(path): _digest(path)}
+    except (UnicodeError, OSError) as exc:
+        raise Invalid('system CA input cannot be read safely: ' + str(exc)) from exc
+
+
+def _setup_wrap(command: list[str], clone: Path, readonly: list[str]) -> list[str]:
+    return isolation.wrap(command, clone, 'bwrap', [*readonly, *_system_inputs()])
+
+
 def _wrap(command: list[str], clone: Path, wheelhouse: Path, folder: Path) -> list[str]:
-    args = isolation.wrap(command, clone, 'bwrap', [str(wheelhouse)])
+    args = _setup_wrap(command, clone, [str(wheelhouse)])
     # The generated folder is the only writable host mount. Never accept it from a recipe.
     pos = args.index('--')
     return args[:pos] + ['--bind', str(folder), str(folder)] + args[pos:]
@@ -130,9 +155,10 @@ def prepare(cfg: Config, queue: Queue, item_id: str, recipe_file: Path, timeout:
     parent = Path(cfg.work_dir).absolute() / 'environments'
     if parent.is_symlink() or any(p.is_symlink() for p in parent.parents):
         raise Invalid('environment root must not have symlink ancestors')
+    system_inputs = _system_inputs()
     # Check kernel support before creating a setup workspace.
     try:
-        probe = subprocess.run(isolation.wrap(['/usr/bin/python3', '-c', PROBE], clone, 'bwrap', []),
+        probe = subprocess.run(_setup_wrap(['/usr/bin/python3', '-c', PROBE], clone, []),
                                capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise Invalid('setup runtime/namespace probe unavailable; no host fallback: ' + str(exc)) from exc
@@ -173,10 +199,12 @@ for i,command in enumerate(commands):
         return {'status': 'environment_failed', 'id': item_id, 'exit_code': rc, 'logs': str(folder),
                 'reason': detail, 'warning': 'setup failure is not bug evidence; preserve logs, no host fallback'}
     current = _source_snapshot(clone, base)
+    if _system_inputs() != system_inputs:
+        raise Invalid(f'system CA input changed during setup; no receipt saved, inspect {folder}')
     if current != snapshot:
         raise Invalid(f'checkout changed during setup; environment receipt not saved, inspect logs at {folder}')
     rec = {'schema': 1, 'status': 'environment_prepared', 'id': item_id, 'repo': item.repo,
-           'clone': str(clone), 'checkout': snapshot, 'recipe': recipe, 'environment': str(folder),
+           'clone': str(clone), 'checkout': snapshot, 'recipe': recipe, 'system_inputs': system_inputs, 'environment': str(folder),
            'python': str(runtime / 'bin/python'), 'receipt_file': str(folder / 'receipt.json'), 'isolation': 'bwrap-offline-setup',
            'warning': 'setup checks only; installed copies may not follow later edits. No automatic verification handoff, dependency resolution or assistant isolation'}
     try:
@@ -256,6 +284,8 @@ def status(cfg: Config, queue: Queue, item_id: str, receipt_file: Path) -> dict:
     if now != snapshot or now['base'] != current_base:
         raise Invalid('setup source snapshot changed; prepare a new environment')
     _validate_recipe(rec['recipe'], clone)
+    if _system_inputs() != rec.get('system_inputs'):
+        raise Invalid('system CA input changed; prepare a new environment')
     runtime = folder / 'venv'
     if _runtime_digest(runtime) != rec.get('runtime_sha256'):
         raise Invalid('prepared runtime changed; inspect and prepare again')

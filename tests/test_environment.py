@@ -56,7 +56,7 @@ def available(source):
         reason = 'bubblewrap unavailable'
     else:
         try:
-            p = subprocess.run(environment.isolation.wrap(['/usr/bin/python3', '-c', environment.PROBE], source, 'bwrap', []), capture_output=True, timeout=30)
+            p = subprocess.run(environment._setup_wrap(['/usr/bin/python3', '-c', environment.PROBE], source, []), capture_output=True, timeout=30)
             if p.returncode:
                 reason = 'system venv probe failed: ' + (p.stdout + p.stderr).decode()
         except (OSError, subprocess.TimeoutExpired) as exc:
@@ -253,3 +253,59 @@ def test_failed_worker_output_not_lost_to_empty_step_log(setup, monkeypatch):
     out = environment.prepare(cfg, q, 'i', path)
     assert out['exit_code'] == 124 and 'timeout after 1s' in out['reason']
     assert not (Path(out['logs']) / 'receipt.json').exists()
+
+
+def test_setup_ca_is_narrow_readonly_and_receipted(setup, monkeypatch):
+    cfg, q, source, path, data = setup
+    available(source)
+    ca = environment.CA_BUNDLE
+    if not ca.exists():
+        if os.environ.get('OSSFORGE_REQUIRE_NATIVE_SETUP') == '1':
+            pytest.fail('this regression needs the public system CA fixture')
+        pytest.skip('public system CA fixture unavailable')
+    data['commands'] = [['{python}', '-c', """import ssl
+from pathlib import Path
+ssl.create_default_context(cafile='/etc/ssl/certs/ca-certificates.crt')
+assert not Path('/etc/passwd').exists()
+p = Path('/etc/ssl/certs/ca-certificates.crt')
+try:
+    p.write_text('bad')
+except OSError:
+    pass
+else:
+    raise AssertionError('CA writable')
+"""]]
+    path.write_text(json.dumps(data))
+    out = environment.prepare(cfg, q, 'i', path)
+    assert out['status'] == 'environment_prepared', out
+    assert out['system_inputs'] == {str(ca): hashlib.sha256(ca.read_bytes()).hexdigest()}
+    receipt = Path(out['receipt_file'])
+    assert environment.status(cfg, q, 'i', receipt) == out
+    monkeypatch.setattr(environment, '_system_inputs', lambda: {str(ca): 'changed'})
+    with pytest.raises(environment.Invalid, match='system CA input changed'):
+        environment.status(cfg, q, 'i', receipt)
+
+
+def test_setup_ca_refuses_symlink_and_noncertificate(tmp_path, monkeypatch):
+    ca = tmp_path / 'ca.crt'
+    ca.write_text('-----BEGIN PRIVATE KEY-----\nnot public\n-----END PRIVATE KEY-----')
+    monkeypatch.setattr(environment, 'CA_BUNDLE', ca)
+    with pytest.raises(environment.Invalid, match='only public certificate'):
+        environment._system_inputs()
+    link = tmp_path / 'link'
+    link.symlink_to(ca)
+    monkeypatch.setattr(environment, 'CA_BUNDLE', link)
+    with pytest.raises(environment.Invalid, match='non-symlink'):
+        environment._system_inputs()
+
+
+@pytest.mark.parametrize('error', [UnicodeError('bad encoding'), OSError('unreadable')])
+def test_ca_read_errors_are_clean_refusals(tmp_path, monkeypatch, error):
+    ca = tmp_path / 'ca.crt'
+    ca.write_text('placeholder')
+    monkeypatch.setattr(environment, 'CA_BUNDLE', ca)
+    def fail(*a, **kw):
+        raise error
+    monkeypatch.setattr(Path, 'read_text', fail)
+    with pytest.raises(environment.Invalid, match='cannot be read safely'):
+        environment._system_inputs()

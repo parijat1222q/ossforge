@@ -646,7 +646,14 @@ support. It checks the current recorded policy and resolved publication route,
 clean source and wheel manifest before running. The namespace has no network,
 a private home, read-only source/system files/wheelhouse, and one new writable
 environment folder under the configured work directory. It never falls back to
-host setup. `--timeout SECONDS` bounds the whole setup worker to 1..1800 seconds
+host setup. Setup alone also exposes the fixed public CA bundle
+`/etc/ssl/certs/ca-certificates.crt` read-only when present, because Debian's pip
+loads it even during offline ensurepip. No other `/etc/ssl` file is mounted.
+The bundle must be a bounded non-symlink file containing certificate blocks only;
+a present symlink, unreadable file, comments or other non-certificate content is
+unsupported and refused, not silently skipped. Its path and SHA-256 are saved as `system_inputs` and checked after setup and by
+`environment-status`. A changed bundle needs a new environment. This does not
+enable networking or disable TLS checks. `--timeout SECONDS` bounds the whole setup worker to 1..1800 seconds
 (default 600); a timeout terminates its process group. Failed attempts retain logs
 and never save a success receipt. Unsupported builds needing source writes,
 services, extra system tools or online access stop here; do not weaken the boundary
