@@ -127,10 +127,13 @@ def prepare(cfg: Config, queue: Queue, item_id: str, recipe_file: Path, timeout:
     if parent.is_symlink() or any(p.is_symlink() for p in parent.parents):
         raise Invalid('environment root must not have symlink ancestors')
     # Check kernel support before creating a setup workspace.
-    probe = subprocess.run(isolation.wrap(['/usr/bin/python3', '-c', 'import venv,ensurepip'], clone, 'bwrap', []),
-                           capture_output=True, text=True, timeout=10)
+    try:
+        probe = subprocess.run(isolation.wrap(['/usr/bin/python3', '-m', 'venv', '/tmp/ossforge-probe'], clone, 'bwrap', []),
+                               capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise Invalid('setup runtime/namespace probe unavailable; no host fallback: ' + str(exc)) from exc
     if probe.returncode:
-        raise Invalid('setup runtime/namespace unavailable (requires /usr/bin/python3 venv and ensurepip); no host fallback: ' + probe.stderr[-600:])
+        raise Invalid('setup runtime/namespace unavailable (requires system Python venv); no host fallback: ' + (probe.stdout + probe.stderr)[-1200:])
     resolved = parent.resolve()
     if (resolved == clone or resolved.is_relative_to(clone) or clone.is_relative_to(resolved)
             or resolved == wheelhouse or resolved.is_relative_to(wheelhouse) or wheelhouse.is_relative_to(resolved)):
@@ -161,7 +164,8 @@ for i,command in enumerate(commands):
     rc, output = _run(argv, clone, timeout)
     if rc:
         logs = sorted(folder.glob('step-*.log'), key=lambda p: int(p.stem.split('-')[-1]))
-        detail = logs[-1].read_text(errors='replace')[-1200:] if logs else output
+        detail = (logs[-1].read_text(errors='replace')[-1200:] if logs else '')
+        detail = '\n'.join(v for v in (detail, output) if v).strip() or f'setup worker exited {rc}; inspect retained logs'
         return {'status': 'environment_failed', 'id': item_id, 'exit_code': rc, 'logs': str(folder),
                 'reason': detail, 'warning': 'setup failure is not bug evidence; preserve logs, no host fallback'}
     current = _source_snapshot(clone, base)

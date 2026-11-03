@@ -3,11 +3,15 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      OSSFORGE_REQUIRE_NATIVE_SETUP: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install native setup test prerequisites
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap python3-venv
       - run: pip install -e ".[dev]" ruff
       - run: ruff check src tests
       - run: pytest -q

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -50,11 +51,20 @@ def setup(tmp_path, monkeypatch):
 
 
 def available(source):
+    reason = ''
     if not shutil.which('bwrap'):
-        pytest.skip('bubblewrap unavailable')
-    p = subprocess.run(environment.isolation.wrap(['/usr/bin/python3', '-c', 'import venv,ensurepip'], source, 'bwrap', []), capture_output=True)
-    if p.returncode:
-        pytest.skip('namespace or system Python venv/ensurepip unavailable: ' + p.stderr.decode()[-300:])
+        reason = 'bubblewrap unavailable'
+    else:
+        try:
+            p = subprocess.run(environment.isolation.wrap(['/usr/bin/python3', '-m', 'venv', '/tmp/ossforge-probe'], source, 'bwrap', []), capture_output=True, timeout=30)
+            if p.returncode:
+                reason = 'system venv probe failed: ' + (p.stdout + p.stderr).decode()[-1200:]
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            reason = str(exc)
+    if reason:
+        if os.environ.get('OSSFORGE_REQUIRE_NATIVE_SETUP') == '1':
+            pytest.fail(reason)
+        pytest.skip(reason)
 
 
 def test_public_cli_native_setup_and_status_preserve_checkout(setup, capsys, tmp_path):
@@ -208,10 +218,38 @@ def test_missing_system_venv_refused_before_output_no_fallback(setup, monkeypatc
     def run(command, *a, **kw):
         if command[0] == 'git':
             return original(command, *a, **kw)
-        assert command[-1] == 'import venv,ensurepip'
+        assert command[-3:] == ['-m', 'venv', '/tmp/ossforge-probe']
         return subprocess.CompletedProcess(command, 1, '', 'ModuleNotFoundError: ensurepip')
     monkeypatch.setattr(environment.isolation.shutil, 'which', lambda *a: '/usr/bin/bwrap')
     monkeypatch.setattr(environment.subprocess, 'run', run)
-    with pytest.raises(environment.Invalid, match='ensurepip.*no host fallback'):
+    with pytest.raises(environment.Invalid, match='system Python venv.*no host fallback'):
         environment.prepare(cfg, q, 'i', path)
     assert not (Path(cfg.work_dir) / 'environments').exists()
+
+
+@pytest.mark.parametrize('error', [OSError('missing system python'), subprocess.TimeoutExpired('probe', 30)])
+def test_probe_launch_or_timeout_is_clean_refusal(setup, monkeypatch, error):
+    cfg, q, source, path, data = setup
+    original = environment.subprocess.run
+    def run(command, *a, **kw):
+        if command[0] == 'git':
+            return original(command, *a, **kw)
+        raise error
+    monkeypatch.setattr(environment.isolation.shutil, 'which', lambda *a: '/usr/bin/bwrap')
+    monkeypatch.setattr(environment.subprocess, 'run', run)
+    with pytest.raises(environment.Invalid, match='probe unavailable; no host fallback'):
+        environment.prepare(cfg, q, 'i', path)
+    assert not (Path(cfg.work_dir) / 'environments').exists()
+
+
+def test_failed_worker_output_not_lost_to_empty_step_log(setup, monkeypatch):
+    cfg, q, source, path, data = setup
+    available(source)
+    from ossforge import verify
+    def run(command, cwd, timeout):
+        # The generated worker has not started, so no step file exists.
+        return 124, 'timeout after 1s; test process group terminated'
+    monkeypatch.setattr(verify, '_run', run)
+    out = environment.prepare(cfg, q, 'i', path)
+    assert out['exit_code'] == 124 and 'timeout after 1s' in out['reason']
+    assert not (Path(out['logs']) / 'receipt.json').exists()
