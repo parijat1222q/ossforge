@@ -181,7 +181,9 @@ def check_dependencies(clone: Path, manifest: dict) -> None:
             or len(manifest['files']) != 7 or not isinstance(manifest['checkout'], dict)):
         raise Invalid('native replay dependency manifest missing or unsupported')
     snapshot = manifest['checkout']
-    if environment._source_snapshot(clone, snapshot['base']) != snapshot:
+    from . import contribution_base as cb
+    selected = cb.validate(snapshot.get('contribution_base'), snapshot.get('contribution_base', {}).get('repo') if isinstance(snapshot.get('contribution_base'), dict) else '', explicit='contribution_base' in snapshot)
+    if cb.bind(environment._source_snapshot(clone, snapshot['base']), selected) != snapshot:
         raise Invalid('native replay source snapshot changed')
     if environment._system_inputs() != manifest['system_inputs']:
         raise Invalid('native replay public CA input changed')
@@ -266,7 +268,9 @@ def complete(cfg: Config, queue: Queue, proposal: dict, receipt_file: Path, spec
     item, clone = environment._item(queue, proposal['id'])
     if proposal.get('outcome') == 'hold':
         raise Invalid('native replay completion requires a fix proposal, not hold')
-    base = submit._base(str(clone))
+    from . import contribution_base as cb
+    cb.check(proposal, cb.of(item))
+    base = submit._item_base(item)
     snapshot = evidence.capture(clone, base, [])
     if proposal['base'] != base or proposal['branch'] != snapshot['branch']:
         raise driver.Invalid('native replay proposal base/branch changed')
@@ -294,7 +298,7 @@ def complete(cfg: Config, queue: Queue, proposal: dict, receipt_file: Path, spec
         if rc:
             raise Invalid('native replay check failed; queue remains clean: ' + output[-500:])
         check_dependencies(clone, manifest)
-    current = evidence.capture(clone, base, [expected_command, *proposal['check_commands']])
+    current = evidence.capture(clone, base, [expected_command, *proposal['check_commands']], **({'contribution_base': item.contribution_base} if item.contribution_base else {}))
     if any(current[k] != snapshot[k] for k in ('base', 'tree', 'branch')):
         raise Invalid('native replay source changed before promotion')
     current['verification_kind'] = 'python_native_replay'

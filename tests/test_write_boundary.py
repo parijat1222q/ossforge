@@ -911,3 +911,26 @@ def test_production_completed_result_cannot_reenter_publication(world):
     assert world['log'].read_bytes() == before_calls
     assert q.path.read_bytes() == before_queue
     assert world['lim'].remaining() == before_allowance
+
+
+@pytest.mark.parametrize('branch', ['dev', 'ABCD/topic'])
+def test_explicit_repository_base_reaches_actual_pr_argv(world, branch):
+    base=sh('git','rev-parse','origin/HEAD',cwd=world['clone'])
+    sh('git','update-ref','refs/remotes/origin/'+branch,base,cwd=world['clone'])
+    sh('git','update-ref','refs/heads/'+branch,base,cwd=world['up'])
+    it=world['it']
+    it.contribution_base={'repo':it.repo,'branch':branch,'revision':base}
+    it.verification=evidence.capture(world['clone'],base,[['fixture-test']],contribution_base=it.contribution_base)
+    records=policy_review._load(world['cfg'])
+    records[it.repo]['contribution_base']=dict(it.contribution_base)
+    policy_review._file(world['cfg']).write_text(json.dumps(records))
+    # Empty policy docs fixture; keep branch identity current while real Git gate/push/PR path runs.
+    original_check=policy_review.check
+    world['mp'].setattr(policy_review,'snapshot',lambda repo,**kw:{'docs':[],'ref':branch,'contribution_base':dict(it.contribution_base)})
+    assert original_check(world['cfg'],it.repo)==''
+    result=run(world,execute=True)
+    assert result['pr'].endswith('/12')
+    pr=next(argv for argv in writes(world['log']) if argv[:2]==['pr','create'])
+    assert pr[pr.index('--base')+1]==branch
+    assert sh('git','rev-parse',branch,cwd=world['up'])==base
+    assert '--base' in pr and 'me:fix/x' in pr

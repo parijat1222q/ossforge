@@ -103,12 +103,13 @@ def decide(
     return "approve", reasons
 
 
-def policy_texts(repo: str, *, fresh: bool = False) -> dict[str, str]:
+def policy_texts(repo: str, *, fresh: bool = False, ref: str | None = None) -> dict[str, str]:
     """Policy/contributing docs that exist, fetched after one listing per folder (not 9 blind probes)."""
     out = {}
-    paths = gh.existing_files(repo, policy.POLICY_FILES, fresh=True, strict=True) if fresh else gh.existing_files(repo, policy.POLICY_FILES)
+    kwargs = {"ref": ref} if ref is not None else {}
+    paths = gh.existing_files(repo, policy.POLICY_FILES, fresh=True, strict=True, **kwargs) if fresh else gh.existing_files(repo, policy.POLICY_FILES, **kwargs)
     for p in paths:
-        t = gh.file_text(repo, p, fresh=True) if fresh else gh.file_text(repo, p)
+        t = gh.file_text(repo, p, fresh=True, **kwargs) if fresh else gh.file_text(repo, p, **kwargs)
         if fresh and t is None:
             raise gh.GhError("listed policy file could not be read")
         if t:

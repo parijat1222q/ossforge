@@ -6,6 +6,8 @@ state file. External editors are unsupported; byte snapshots catch stale inputs.
 """
 from __future__ import annotations
 
+from urllib.parse import quote
+
 import base64
 import hashlib
 import json
@@ -133,10 +135,15 @@ def _target(cfg: Config, lead: dict) -> dict:
                 or info.get('html_url') != f"https://github.com/{info.get('full_name')}"
                 or not isinstance(info.get('default_branch'), str)):
             raise Invalid('same-source stable repository identity unavailable')
-        branch = info['default_branch']
+        default_branch = info['default_branch']
+        recorded = policy_review._load(cfg).get(lead['repo'].lower(), {})
+        name = policy_review.reviewed_branch(recorded)
+        branch = name or default_branch
+        if ((lead.get('contribution_base') or {}).get('branch') if lead.get('contribution_base') else None) != name:
+            raise Invalid('reviewed contribution branch changed; preserve selected source')
         if subprocess.run(['git', 'check-ref-format', '--branch', branch], capture_output=True).returncode:
             raise Invalid('selected default branch malformed')
-        tip = gh.api(f"repos/{lead['repo']}/commits/{branch}", fresh=True)
+        tip = gh.api(f"repos/{lead['repo']}/commits/{quote(branch, safe='')}", fresh=True)
         if (not isinstance(tip, dict) or not SHA.fullmatch(str(tip.get('sha', '')))
                 or tip.get('html_url') != f"https://github.com/{info['full_name']}/commit/{tip['sha']}"):
             raise Invalid('selected source revision unavailable')
@@ -152,7 +159,9 @@ def _target(cfg: Config, lead: dict) -> dict:
             raise Invalid('old selected source origin identity changed')
         recorded = policy_review._load(cfg).get(lead['repo'].lower(), {})
         extras = recorded.get('extra_paths', [])
-        snapshot = policy_review.snapshot(lead['repo'], extra_paths=extras)
+        snapshot = policy_review.snapshot(lead['repo'], extra_paths=extras, **({'ref': name} if name is not None else {}))
+        if name is not None and (snapshot.get('contribution_base') != recorded['contribution_base'] or tip['sha'] != recorded['contribution_base']['revision']):
+            raise Invalid('reviewed contribution branch moved; re-review before continuation')
         if snapshot.get('anti_ai') or snapshot.get('agent_review'):
             raise Invalid('contribution policy restriction; preserve selected source')
         why = policy_review.check(cfg, lead['repo'], snapshot)
@@ -167,14 +176,19 @@ def _target(cfg: Config, lead: dict) -> dict:
     blocked = safety.repo_allowed(cfg, lead['repo'], safety.effective_history(safety.Audit(cfg.path('audit.jsonl')).read()))
     if blocked:
         raise Invalid(blocked)
-    return {**lead, 'revision': tip['sha'], 'revision_url': tip['html_url'], 'default_branch': branch,
+    result = {**lead, 'revision': tip['sha'], 'revision_url': tip['html_url'], 'default_branch': default_branch,
+            'contribution_base': recorded.get('contribution_base'),
             'policy': snapshot, 'code_suitability': suitability,
             'repository_identity': {'id': info['id'], 'full_name': info['full_name'], 'url': info['html_url'],
                 'provenance': 'current same-source check; not a historical certification of legacy work' if old_id is None else 'matches recorded stable repository id'}}
 
+    if result.get('contribution_base') is None:
+        result.pop('contribution_base', None)
+    return result
+
 
 def _pin(lead: dict) -> dict:
-    return {k: lead[k] for k in ('repo', 'revision', 'default_branch', 'policy', 'repository_identity')}
+    return {k: lead[k] for k in ('repo', 'revision', 'default_branch', 'policy', 'repository_identity')} | ({'contribution_base': lead['contribution_base']} if lead.get('contribution_base') else {})
 
 
 def _git(root: Path, *args) -> str:
@@ -204,7 +218,7 @@ def _clone(cfg: Config, target: dict, dest: Path) -> None:
         return  # Validate exact existing partial/completed destination, no reset.
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
-        subprocess.run(['git', 'clone', '--depth', '50', '--branch', target['default_branch'],
+        subprocess.run(['git', 'clone', '--depth', '50', '--branch', (target.get('contribution_base') or {}).get('branch', target['default_branch']),
                         '--single-branch', '--', f"https://github.com/{target['repo']}", str(dest)],
                        check=True, capture_output=True, timeout=300)
     except (OSError, subprocess.SubprocessError) as exc:
@@ -233,13 +247,13 @@ def _validate_clone(cfg: Config, target: dict, dest: Path, old: dict) -> dict:
     if remote != f"https://github.com/{target['repo']}":
         raise Invalid('continuation origin does not match exact selected repository')
     if (_git(dest, 'rev-parse', 'HEAD') != target['revision']
-            or _git(dest, 'symbolic-ref', '--short', 'HEAD') != target['default_branch']):
+            or _git(dest, 'symbolic-ref', '--short', 'HEAD') != (target.get('contribution_base') or {}).get('branch', target['default_branch'])):
         raise Invalid('continuation SHA/branch differs from pinned target; never reset')
     problems = identity.check_worktree(cfg, str(dest))
     if problems:
         raise Invalid('checkout identity differs: ' + '; '.join(problems))
     preparation.public_guard(dest)
-    return evidence.capture(dest, target['revision'], [])
+    return evidence.capture(dest, target['revision'], [], **({'contribution_base': target['contribution_base']} if target.get('contribution_base') else {}))
 
 
 def _raw_review(value) -> None:
@@ -263,6 +277,10 @@ def _lead(value, *, target=False) -> None:
             or not isinstance(value.get('base'), str) or not SHA.fullmatch(value['base'])
             or not isinstance(value.get('checkout'), dict)):
         raise Invalid('continuation nested source identity invalid')
+    from . import contribution_base
+    contribution_base.validate(value.get('contribution_base'), value['repo'], explicit='contribution_base' in value)
+    if value.get('contribution_base') and value['contribution_base']['revision'] != value['revision']:
+        raise Invalid('contribution base pin differs from selected revision')
     if target:
         ident = value.get('repository_identity')
         if (not isinstance(ident, dict) or type(ident.get('id')) is not int or ident['id'] <= 0
@@ -582,7 +600,7 @@ def reconcile_run(cfg: Config, reason: str) -> dict:
         raise Invalid('driver lifetime unresolved; journal review cannot establish child termination')
     _target(cfg, lead)
     # No unverified changed source is hidden by a journal acknowledgement.
-    if evidence.capture(Path(lead['clone']), lead['base'], []) != lead['checkout']:
+    if evidence.capture(Path(lead['clone']), lead['base'], [], **({'contribution_base': lead['contribution_base']} if lead.get('contribution_base') else {})) != lead['checkout']:
         raise Invalid('selected checkout changed; preserve it before run reconciliation')
     review = {'schema': 1, 'raw': raw, 'digest': _raw_digest(raw), 'config_identity': _config_identity(cfg), 'reason': reason.strip()}
     review['fingerprint'] = _digest(review)

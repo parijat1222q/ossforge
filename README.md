@@ -50,6 +50,7 @@ bug/perf candidates and drafts a respectful comment for you to approve.
   (it stops instead). `true` always adds the note. If the policy docs cannot be read, nothing is published. This is a
   keyword reading of the docs, not a compliance check: for a repo with strict rules, read its guidelines yourself.
   Migration: older configs had `disclosure: true` (always add); that still works. Only the default changed.
+- **Repository-specific PR base.** The coding assistant reads current contribution rules and records the exact base with `policy-review --accept --contribution-branch BRANCH --note SOURCE_REASON`. No main/dev guess or repository-specific hardcode. Ambiguous rules mean hold. Explicit repo/branch/SHA identity is carried through checkout, tests and PR `--base`; legacy default items are unchanged. This is source review, not owner publication authority.
 - **Policy review.** `submit` and `post-critique` need a recorded `policy-review` for the repo (docs, URLs and blob SHAs pinned; re-review when they change). A missing record or an empty scan means review needed, not "no policy". A prohibited record or anti-AI wording always blocks.
 - **Audit trail.** Every outbound action is appended to `.state/audit.jsonl`.
 

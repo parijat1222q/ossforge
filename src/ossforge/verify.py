@@ -85,7 +85,7 @@ class VerifyResult:
 
 def verify_fix(clone: Path, base: str, py: Path, test_args: list[str], timeout: int = 600,
                *, test_command: list[str] | None = None, check_commands: list[list[str]] | None = None,
-               failure_code: int = 1, isolation_mode: str = "none", readonly_paths: list[str] | None = None) -> VerifyResult:
+               failure_code: int = 1, isolation_mode: str = "none", readonly_paths: list[str] | None = None, contribution_base: dict | None = None) -> VerifyResult:
     """The branch at HEAD holds fix + test. Revert only the non-test files to base, expect failure,
     restore, expect success, then lint the touched files."""
     r = VerifyResult()
@@ -93,7 +93,7 @@ def verify_fix(clone: Path, base: str, py: Path, test_args: list[str], timeout: 
         r.log.append("test command must be nonempty and failure_code must be 1 or 101")
         return r
     try:
-        initial = evidence.capture(clone, base, [])
+        initial = evidence.capture(clone, base, [], **({"contribution_base": contribution_base} if contribution_base else {}))
     except evidence.StaleEvidence as e:
         r.log.append(str(e))
         return r
@@ -168,7 +168,7 @@ def verify_fix(clone: Path, base: str, py: Path, test_args: list[str], timeout: 
 
     if r.ok:
         try:
-            r.evidence = evidence.capture(clone, base, [pytest, *checks])
+            r.evidence = evidence.capture(clone, base, [pytest, *checks], **({"contribution_base": contribution_base} if contribution_base else {}))
             r.evidence['verification_isolation'] = isolation_mode
             r.evidence['readonly_paths'] = list([] if readonly_paths is None else readonly_paths)
             if any(initial[k] != r.evidence[k] for k in ("base", "tree", "branch")):

@@ -12,7 +12,7 @@ import subprocess
 import uuid
 from pathlib import Path
 
-from . import evidence, isolation, preparation, safety, policy_review
+from . import contribution_base as cb, submit, evidence, isolation, preparation, safety, policy_review
 from .config import Config
 from .queue import Queue
 
@@ -149,8 +149,8 @@ def prepare(cfg: Config, queue: Queue, item_id: str, recipe_file: Path, timeout:
         raise Invalid(why)
     if policy_review.publication_route(cfg, item.repo) not in {'issue_pr', 'pr_only'}:
         raise Invalid('setup requires resolved contribution prerequisites')
-    base = evidence._git(clone, 'merge-base', 'HEAD', 'origin/HEAD')
-    snapshot = _source_snapshot(clone, base)
+    base = submit._item_base(item)
+    snapshot = cb.bind(_source_snapshot(clone, base), cb.of(item))
     recipe, wheelhouse = _recipe(recipe_file, clone)
     parent = Path(cfg.work_dir).absolute() / 'environments'
     if parent.is_symlink() or any(p.is_symlink() for p in parent.parents):
@@ -198,7 +198,7 @@ for i,command in enumerate(commands):
         detail = '\n'.join(v for v in (detail, output) if v).strip() or f'setup worker exited {rc}; inspect retained logs'
         return {'status': 'environment_failed', 'id': item_id, 'exit_code': rc, 'logs': str(folder),
                 'reason': detail, 'warning': 'setup failure is not bug evidence; preserve logs, no host fallback'}
-    current = _source_snapshot(clone, base)
+    current = cb.bind(_source_snapshot(clone, base), cb.of(item))
     if _system_inputs() != system_inputs:
         raise Invalid(f'system CA input changed during setup; no receipt saved, inspect {folder}')
     if current != snapshot:
@@ -207,6 +207,7 @@ for i,command in enumerate(commands):
            'clone': str(clone), 'checkout': snapshot, 'recipe': recipe, 'system_inputs': system_inputs, 'environment': str(folder),
            'python': str(runtime / 'bin/python'), 'receipt_file': str(folder / 'receipt.json'), 'isolation': 'bwrap-offline-setup',
            'warning': 'setup checks only; installed copies may not follow later edits. No automatic verification handoff, dependency resolution or assistant isolation'}
+    cb.bind(rec, cb.of(item))
     try:
         rec['runtime_sha256'] = _runtime_digest(runtime)
     except (ValueError, OSError) as exc:
@@ -275,12 +276,13 @@ def status(cfg: Config, queue: Queue, item_id: str, receipt_file: Path) -> dict:
         raise Invalid('environment receipt is outside the selected workflow')
     if rec.get('python') != str(folder / 'venv/bin/python') or rec.get('receipt_file') != str(folder / 'receipt.json'):
         raise Invalid('prepared interpreter path changed')
+    cb.check(rec, cb.of(item))
     snapshot = rec.get('checkout')
     if (not isinstance(snapshot, dict) or any(not isinstance(snapshot.get(k), str) or not snapshot[k]
                                              for k in ('base', 'tree', 'branch')) or not isinstance(rec.get('recipe'), dict)):
         raise Invalid('environment receipt is incomplete; preserve it')
-    now = _source_snapshot(clone, snapshot['base'])
-    current_base = evidence._git(clone, 'merge-base', 'HEAD', 'origin/HEAD')
+    now = cb.bind(_source_snapshot(clone, snapshot['base']), cb.of(item))
+    current_base = submit._item_base(item)
     if now != snapshot or now['base'] != current_base:
         raise Invalid('setup source snapshot changed; prepare a new environment')
     _validate_recipe(rec['recipe'], clone)

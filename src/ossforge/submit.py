@@ -12,7 +12,7 @@ import fcntl
 from collections.abc import Callable
 from pathlib import Path
 
-from . import references, repo_access, duplicate_reviews, admission, evidence, contributing, dedupe, gh, identity, policy, policy_review, review, safety, vet, predictor
+from . import contribution_base, references, repo_access, duplicate_reviews, admission, evidence, contributing, dedupe, gh, identity, policy, policy_review, review, safety, vet, predictor
 from .config import Config
 from .limiter import DailyLimiter
 from .queue import Item
@@ -35,6 +35,37 @@ def _run(cmd: list[str], cwd: str | None = None) -> str:
 
 def _base(cwd: str) -> str:
     return _run(["git", "merge-base", "HEAD", "origin/HEAD"], cwd)
+
+
+def _item_base(it: Item) -> str:
+    try:
+        selected = contribution_base.of(it)
+    except ValueError as exc:
+        raise Refused(str(exc)) from exc
+    if not selected:
+        return _base(it.clone)
+    ref = contribution_base.ref_name(selected)
+    tip = _run(['git', 'rev-parse', ref], it.clone)
+    base = _run(['git', 'merge-base', 'HEAD', ref], it.clone)
+    if tip != selected['revision'] or base != tip:
+        raise Refused('selected contribution base ref changed or is not an ancestor; preserve checkout')
+    return tip
+
+
+def _base_identity_gate(it: Item, cfg: Config) -> None:
+    try:
+        selected = contribution_base.of(it)
+    except ValueError as exc:
+        raise Refused(str(exc)) from exc
+    recorded = policy_review._load(cfg).get(it.repo.lower(), {})
+    try:
+        policy_review.reviewed_branch(recorded)  # validate present explicit policy identity
+    except ValueError as exc:
+        raise Refused(str(exc)) from exc
+    if selected != recorded.get('contribution_base'):
+        raise Refused('contribution branch differs from policy review; preserve source and recheck')
+    if selected:
+        _item_base(it)
 
 
 def _identity_gate(cfg: Config, cwd: str, base: str, repo: str, fork: bool) -> None:
@@ -61,6 +92,22 @@ def _repo_access_gate(it: Item) -> None:
 def _upstream_gate(it: Item) -> None:
     if it.submitted.get("pr_url"):
         return
+    selected = contribution_base.of(it)
+    if selected:
+        problems = identity.check_upstream(it.clone, it.repo)
+        if problems:
+            raise Refused('; '.join(problems))
+        exact = 'refs/heads/' + selected['branch']
+        try:
+            probe = subprocess.run(['git', 'ls-remote', 'origin', exact], cwd=it.clone,
+                                   capture_output=True, text=True, timeout=120)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise Refused('selected upstream branch unavailable') from exc
+        rows = probe.stdout.splitlines()
+        if (probe.returncode or len(rows) != 1 or rows[0].split() != [selected['revision'], exact]
+                or _item_base(it) != selected['revision']):
+            raise Refused('selected upstream branch moved or unavailable; preserve and reverify')
+        return
     # Inspect the live default tip without fetching/resetting an active patch checkout.
     # A changed branch needs the operator to refresh/rebase/test, not an automatic rewrite.
     problems = identity.check_upstream(it.clone, it.repo)
@@ -75,13 +122,13 @@ def _upstream_gate(it: Item) -> None:
         raise Refused("upstream default tip unavailable; not publishing")
     output = probe.stdout.split()
     local = _run(["git", "rev-parse", "origin/HEAD"], it.clone)
-    if len(output) != 2 or output[1] != "HEAD" or output[0] != local or _base(it.clone) != local:
+    if len(output) != 2 or output[1] != "HEAD" or output[0] != local or _item_base(it) != local:
         raise Refused("upstream default branch changed or could not be verified; fetch, review/rebase and re-run verification before publishing")
 
 
 def _evidence_gate(it: Item) -> None:
     try:
-        evidence.check(Path(it.clone), _base(it.clone), it.branch, it.verification)
+        evidence.check(Path(it.clone), _item_base(it), it.branch, it.verification, **({"contribution_base": it.contribution_base} if it.contribution_base else {}))
     except evidence.StaleEvidence as e:
         raise Refused(str(e)) from e
 
@@ -89,7 +136,7 @@ def _evidence_gate(it: Item) -> None:
 def _admission_gate(it: Item, cfg: Config) -> dict:
     if not cfg.maintainer_admission:
         return {}
-    base = _base(it.clone)
+    base = _item_base(it)
     paths = _run(["git", "diff", "--name-only", "--no-renames", f"{base}..HEAD"], it.clone).splitlines()
     numbers = _run(["git", "diff", "--numstat", "--no-renames", f"{base}..HEAD"], it.clone)
     try:
@@ -98,24 +145,24 @@ def _admission_gate(it: Item, cfg: Config) -> dict:
         raise Refused(f"maintainer admission: {e}") from e
 
 
-def _ensure_signoff(cwd: str) -> None:
-    base = _base(cwd)
+def _ensure_signoff(cwd: str, base: str | None = None) -> None:
+    base = base or _base(cwd)
     unsigned = _run(["git", "rev-list", "--grep=^Signed-off-by:", "--invert-grep", f"{base}..HEAD"], cwd)
     if unsigned:
         _run(["git", "rebase", "--signoff", base], cwd)
 
 
-def _policy_files(repo: str) -> dict[str, str]:
+def _policy_files(repo: str, ref: str | None = None) -> dict[str, str]:
     """Fail closed: if the repo's policy docs cannot be read, nothing is published."""
     try:
-        return vet.policy_texts(repo, fresh=True)
+        return vet.policy_texts(repo, fresh=True, **({"ref": ref} if ref is not None else {}))
     except gh.GhError as e:
         raise Refused(f"could not read {repo} policy docs ({e}); not publishing") from e
 
 
-def _disclosure(cfg: Config, repo: str) -> tuple[bool, policy.Disclosure]:
+def _disclosure(cfg: Config, repo: str, ref: str | None = None) -> tuple[bool, policy.Disclosure]:
     try:
-        return policy.decide_disclosure(cfg.disclosure, _policy_files(repo))
+        return policy.decide_disclosure(cfg.disclosure, _policy_files(repo, **({"ref": ref} if ref is not None else {})))
     except policy.NeedsReview as e:
         raise Refused(f"needs your review: {e}") from e
 
@@ -171,7 +218,7 @@ def _duplicate_gate(it: Item, cfg: Config | None = None) -> None:
     if it.submitted.get("pr_url"):
         return
     try:
-        changed = _run(["git", "diff", "--name-only", f"{_base(it.clone)}..HEAD"], it.clone).splitlines()
+        changed = _run(["git", "diff", "--name-only", f"{_item_base(it)}..HEAD"], it.clone).splitlines()
         paths = [p for p in changed if not predictor.is_test_path(p)]
         if not paths or len(paths) > 10:
             raise Refused("duplicate check needs 1..10 verified changed source paths; review larger changes separately")
@@ -190,7 +237,7 @@ def _duplicate_gate(it: Item, cfg: Config | None = None) -> None:
         if dedupe.is_duplicate(ms):
             raise Refused("duplicate found: " + ", ".join(f"#{m.number}({m.state})" for m in ms[:3]))
         for path in paths:
-            recent = dedupe.recent_commit_hits(it.repo, path, dedupe.evidence_terms(it.issue_title, it.issue_body), strict=True)
+            recent = dedupe.recent_commit_hits(it.repo, path, dedupe.evidence_terms(it.issue_title, it.issue_body), strict=True, **({"ref": it.contribution_base["revision"]} if it.contribution_base else {}))
             if cfg is not None:
                 recent = [url for url in recent if not duplicate_reviews.unchanged_commit(
                     cfg.path("duplicate_reviews.json"), it, url)]
@@ -239,10 +286,11 @@ def preflight(it: Item, limiter: DailyLimiter, cfg: Config, history: list[dict])
     why = safety.repo_allowed(cfg, it.repo, history)
     if why and not (it.submitted.get("issue_url") or it.submitted.get("pr_url")):
         raise Refused(why)
+    _base_identity_gate(it, cfg)
     _repo_access_gate(it)
     _upstream_gate(it)
     _source_work_gate(it)
-    files = _policy_files(it.repo)
+    files = _policy_files(it.repo, **({"ref": it.contribution_base["revision"]} if it.contribution_base else {}))
     pol = policy.scan_files(files)
     if pol.anti_ai:
         raise Refused(f"anti-AI policy in {pol.source}")
@@ -251,10 +299,10 @@ def preflight(it: Item, limiter: DailyLimiter, cfg: Config, history: list[dict])
     why = policy_review.check(cfg, it.repo)
     if why:
         raise Refused(why)
-    _disclosure(cfg, it.repo)  # surfaces an unclear or conflicting disclosure policy in the dry run
+    _disclosure(cfg, it.repo, **({"ref": it.contribution_base["revision"]} if it.contribution_base else {}))  # surfaces an unclear or conflicting disclosure policy in the dry run
     _duplicate_gate(it, cfg)
     cwd = str(Path(it.clone))
-    base = _base(cwd)
+    base = _item_base(it)
     _identity_gate(cfg, cwd, base, it.repo, fork=False)
     _evidence_gate(it)
     _admission_gate(it, cfg)
@@ -305,7 +353,7 @@ def submit(it: Item, limiter: DailyLimiter, cfg: Config, audit: safety.Audit, ex
                     raise Refused("already submitted; inspect the saved contribution and live remote state, do not publish again")
                 if stored.status != "verified":
                     raise Refused(f"queue status changed to {stored.status!r}; reload and review before publishing")
-                fields = ("repo", "clone", "branch", "source_issue", "consent_issue", "work", "path", "kind",
+                fields = ("repo", "clone", "branch", "contribution_base", "source_issue", "consent_issue", "work", "path", "kind",
                           "issue_title", "issue_body", "pr_title", "pr_body", "verification")
                 if any(getattr(it, field) != getattr(stored, field) for field in fields):
                     raise Refused("queue proposal or verification changed; reload and review before publishing")
@@ -334,16 +382,17 @@ def _submit(it: Item, limiter: DailyLimiter, cfg: Config, audit: safety.Audit, e
     mode = _publication_mode(it, cfg)
     plan = {"repo": it.repo, "publication_mode": mode, "issue": None if mode == "pr_only" else it.issue_title, "pr": it.pr_title, "branch": it.branch,
             "resume": bool(it.submitted.get("issue_url")),
-            "disclosure": "add" if _disclosure(cfg, it.repo)[0] else "no"}
+            "disclosure": "add" if _disclosure(cfg, it.repo, **({"ref": it.contribution_base["revision"]} if it.contribution_base else {}))[0] else "no"}
     plan["maintainer_admission"] = _admission_gate(it, cfg)
     if not execute:
         return {"dry_run": True, **plan}
 
     prog = dict(it.submitted)
-    add_note, disc = _disclosure(cfg, it.repo)
+    add_note, disc = _disclosure(cfg, it.repo, **({"ref": it.contribution_base["revision"]} if it.contribution_base else {}))
     note = DISCLOSURE if add_note else ""
     cwd = str(Path(it.clone))
-    _identity_gate(cfg, cwd, _base(cwd), it.repo, fork=False)  # re-check at the write boundary
+    _base_identity_gate(it, cfg)
+    _identity_gate(cfg, cwd, _item_base(it), it.repo, fork=False)  # re-check at the write boundary
     _evidence_gate(it)  # exact tested content again immediately before the first external write
     _admission_gate(it, cfg)  # current upstream consent, never cached
     # A PR-only resume makes no issue/fork write here. Keep its fresh checks at
@@ -386,14 +435,15 @@ def _submit(it: Item, limiter: DailyLimiter, cfg: Config, audit: safety.Audit, e
         have = subprocess.run(["git", "remote"], cwd=cwd, capture_output=True, text=True).stdout.split()
         _run(["git", "remote", "set-url" if "fork" in have else "add", "fork", fork], cwd)
         if cfg.signoff_for(it.repo):
-            _ensure_signoff(cwd)
-        _identity_gate(cfg, cwd, _base(cwd), it.repo, fork=True)  # the destination is the operator's own fork
+            _ensure_signoff(cwd, _item_base(it))
+        _identity_gate(cfg, cwd, _item_base(it), it.repo, fork=True)  # the destination is the operator's own fork
         _admission_gate(it, cfg)
         _evidence_gate(it)  # signoff may rewrite commits, but must not change the tested tree
         _run(["git", "push", "-u", "fork", it.branch], cwd)
         progress(fork_pushed=True)
 
     if not prog.get("pr_url"):
+        _base_identity_gate(it, cfg)
         _repo_access_gate(it)
         if limiter.remaining() <= 0:
             raise Refused("daily PR cap reached; existing issue/fork progress retained for a later day")
@@ -404,7 +454,8 @@ def _submit(it: Item, limiter: DailyLimiter, cfg: Config, audit: safety.Audit, e
         _admission_gate(it, cfg)
         draft = ["--draft"] if cfg.maintainer_admission else []
         _evidence_gate(it)
-        url = _run(["gh", "pr", "create", *draft, "-R", it.repo, "--head", f"{me}:{it.branch}", "-t", it.pr_title, "-b", body], cwd)
+        base_args = ["--base", it.contribution_base["branch"]] if it.contribution_base else []
+        url = _run(["gh", "pr", "create", *draft, *base_args, "-R", it.repo, "--head", f"{me}:{it.branch}", "-t", it.pr_title, "-b", body], cwd)
         progress(pr_url=url)
         limiter.record()
         audit.log("pr_opened", repo=it.repo, pr=int(url.rsplit("/", 1)[-1]), url=url, item=it.id, state="open")

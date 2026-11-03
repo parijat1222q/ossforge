@@ -77,6 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
     add("preparation-verify", "native-check local patch and retain drafts, never publish", "result_file")
     add("radar", "score a repo's health", "repo")
     prv = add("policy-review", "show a repo's policy docs (URLs, SHAs) and optionally record YOUR review before submitting", "repo")
+    prv.add_argument("--contribution-branch", help="exact source-reviewed PR base branch; requires --accept and a review note")
     prv.add_argument("--accept", action="store_true", help="record that you read the docs and the repo's own pages")
     prv.add_argument("--prohibited", action="store_true", help="record that the repo's rules forbid this contribution")
     prv.add_argument("--publication-route", choices=["issue_pr", "pr_only", "issue_first", "unresolved"], help="source-backed route after reading contribution rules; not owner consent")
@@ -338,22 +339,30 @@ def _main(argv: list[str] | None = None, *, _state_locked: bool = False, _reques
             print("READY to publish" if info["ready_to_publish"] else "NOT READY: " + "; ".join(miss and [f"{m} not set" for m in miss] or login + wt))
         return 0 if info["ready_to_publish"] else 1
     elif a.cmd == "policy-review":
-        snap = policy_review.snapshot(a.repo, extra_paths=a.extra_path) if a.extra_path else policy_review.snapshot(a.repo)
-        if a.accept or a.prohibited:
-            if not a.note.strip():
-                print("--note is required: state the restrictions that apply (or 'none found after reading X')")
-                return 2
-            rec = policy_review.record(cfg, a.repo, snap, a.note, prohibited=a.prohibited, publication_route=a.publication_route, local_preparation=a.local_preparation)
-            print("recorded:", json.dumps({k: v for k, v in rec.items() if k != "docs"}), f"{len(rec['docs'])} doc(s) pinned")
-        else:
-            print(f"{a.repo}: {len(snap['docs'])} policy-bearing doc(s) found in the scanned locations; anti-AI wording: {snap['anti_ai']}")
-            if snap.get("agent_review"):
-                print("Agent contribution policy needs review; this is not a blanket AI ban or automated permission:")
-                for excerpt in snap["agent_review"]:
-                    print(f"  {excerpt}")
-            for d in snap["docs"]:
-                print(f"\n== {d['path']}  {d['url']}  blob {d['sha'][:10]}\n{d['text'][:1500]}")
-            print("\nThe scan reads fixed locations only. Also read the project's contribution/AI pages yourself.")
+        if a.contribution_branch is not None and not a.accept:
+            print("--contribution-branch requires --accept and source review")
+            return 2
+        try:
+            kwargs = {"ref": a.contribution_branch} if a.contribution_branch is not None else {}
+            snap = policy_review.snapshot(a.repo, extra_paths=a.extra_path, **kwargs) if a.extra_path else policy_review.snapshot(a.repo, **kwargs)
+            if a.accept or a.prohibited:
+                if not a.note.strip():
+                    print("--note is required: state the restrictions that apply (or 'none found after reading X')")
+                    return 2
+                rec = policy_review.record(cfg, a.repo, snap, a.note, prohibited=a.prohibited, publication_route=a.publication_route, local_preparation=a.local_preparation, contribution_branch=a.contribution_branch)
+                print("recorded:", json.dumps({k: v for k, v in rec.items() if k != "docs"}), f"{len(rec['docs'])} doc(s) pinned")
+            else:
+                print(f"{a.repo}: {len(snap['docs'])} policy-bearing doc(s) found in the scanned locations; anti-AI wording: {snap['anti_ai']}")
+                if snap.get("agent_review"):
+                    print("Agent contribution policy needs review; this is not a blanket AI ban or automated permission:")
+                    for excerpt in snap["agent_review"]:
+                        print(f"  {excerpt}")
+                for d in snap["docs"]:
+                    print(f"\n== {d['path']}  {d['url']}  blob {d['sha'][:10]}\n{d['text'][:1500]}")
+                print("\nThe scan reads fixed locations only. Also read the project's contribution/AI pages yourself.")
+        except (ValueError, OSError, gh.GhError) as exc:
+            print(f"REFUSED: {exc}", file=sys.stderr)
+            return 1
     elif a.cmd == "review-duplicate":
         try:
             duplicate_reviews.record(cfg.path("duplicate_reviews.json"), q.items[a.id], a.number, a.reason)
@@ -577,10 +586,14 @@ def _main(argv: list[str] | None = None, *, _state_locked: bool = False, _reques
             if rc:
                 print("install failed:\n", out)
                 return 1
-        base = submit._run(["git", "merge-base", "HEAD", "origin/HEAD"], str(clone))
+        try:
+            base = submit._item_base(it)
+        except submit.Refused as exc:
+            print(f"REFUSED: {exc}", file=sys.stderr)
+            return 1
         r = verify.verify_fix(clone, base, py, a.tests, test_command=test_command,
                               check_commands=checks, failure_code=a.failure_code, isolation_mode=cfg.verification_isolation,
-                              readonly_paths=cfg.verification_readonly_paths)
+                              readonly_paths=cfg.verification_readonly_paths, **({"contribution_base": it.contribution_base} if it.contribution_base else {}))
         print("failed without fix:", r.failed_without_fix, "| passed with fix:", r.passed_with_fix, "| lint ok:", r.lint_ok)
         stats.record_kind(it.kind, r.ok)
         stats.save()
@@ -636,7 +649,7 @@ def _main(argv: list[str] | None = None, *, _state_locked: bool = False, _reques
             print(res)
     elif a.cmd == "selfreview":
         it = q.items[a.id]
-        base = submit._base(it.clone)
+        base = submit._item_base(it)
         found = review.review_branch(it.repo, it.clone, base, it.pr_body, submit._run, gh)
         for f in found:
             print(f"[{f.level}] {f.msg}")

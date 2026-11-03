@@ -294,3 +294,44 @@ def test_crash_after_git_commit_before_journal_does_not_undo_or_duplicate(tmp_pa
     result.pop('commit_paths')
     assert driver.complete(Queue(cfg.path('queue.json')),result)['status'] == 'verified'
     assert subprocess.check_output(['git','rev-parse','HEAD'],cwd=clone,text=True).strip() == head
+
+
+def test_explicit_base_parent_owned_commit_and_actual_verification(tmp_path,monkeypatch):
+    cfg,command,clone=parent_commit_fixture(tmp_path,monkeypatch)
+    base=subprocess.check_output(['git','rev-parse','origin/HEAD'],cwd=clone,text=True).strip()
+    subprocess.run(['git','update-ref','refs/remotes/origin/ABCD',base],cwd=clone,check=True)
+    q=Queue(cfg.path('queue.json'))
+    selected={'repo':q.items['a'].repo,'branch':'ABCD','revision':base}
+    q.items['a'].contribution_base=selected
+    q.save()
+    out=agent_run.run(cfg,command,discover=False)
+    assert out['status']=='verified_not_submitted'
+    item=Queue(cfg.path('queue.json')).items['a']
+    assert item.verification['contribution_base']==selected
+    task=json.loads(next(cfg.path('driver-jobs').glob('*/task.json')).read_text())
+    result=json.loads(next(cfg.path('driver-jobs').glob('*/result.json')).read_text())
+    assert task['contribution_base']==result['contribution_base']==selected
+    assert task['assigned_checkout']['contribution_base']==selected
+
+
+def test_explicit_base_refuses_parent_commit_on_upstream_branch(tmp_path,monkeypatch):
+    cfg,command,clone=parent_commit_fixture(tmp_path,monkeypatch)
+    base=subprocess.check_output(['git','rev-parse','origin/HEAD'],cwd=clone,text=True).strip()
+    subprocess.run(['git','update-ref','refs/remotes/origin/next-fix',base],cwd=clone,check=True)
+    q=Queue(cfg.path('queue.json'))
+    q.items['a'].contribution_base={'repo':q.items['a'].repo,'branch':'next-fix','revision':base}
+    q.save()
+    with pytest.raises(driver.Invalid,match='HEAD/base/tree or result branch changed'):
+        agent_run.run(cfg,command,discover=False)
+    assert Queue(cfg.path('queue.json')).items['a'].status=='clean'
+
+
+def test_nondefault_single_branch_checkout_without_origin_head_can_parent_commit(tmp_path,monkeypatch):
+    cfg,command,clone=parent_commit_fixture(tmp_path,monkeypatch)
+    base=subprocess.check_output(['git','rev-parse','origin/HEAD'],cwd=clone,text=True).strip()
+    subprocess.run(['git','update-ref','refs/remotes/origin/ABCD',base],cwd=clone,check=True)
+    subprocess.run(['git','symbolic-ref','--delete','refs/remotes/origin/HEAD'],cwd=clone,check=True)
+    q=Queue(cfg.path('queue.json'))
+    q.items['a'].contribution_base={'repo':q.items['a'].repo,'branch':'ABCD','revision':base}
+    q.save()
+    assert agent_run.run(cfg,command,discover=False)['status']=='verified_not_submitted'

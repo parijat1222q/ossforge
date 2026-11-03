@@ -64,6 +64,11 @@ def load(cfg: Config) -> dict:
                              or not discovery._REPO.fullmatch(lead.get('repo', ''))
                              or lead.get('status') not in ('collecting', 'repo_review_needed', 'investigating')):
         raise Invalid('repo research lead invalid; preserve it before retry')
+    if lead and 'contribution_base' in lead:
+        from . import contribution_base
+        contribution_base.validate(lead['contribution_base'], lead['repo'], explicit=True)
+        if lead['contribution_base']['revision'] != lead.get('revision'):
+            raise Invalid('selected contribution base revision mismatch')
     if lead and lead['status'] == 'investigating' and any(not lead.get(k) for k in
             ('clone', 'base', 'checkout', 'revision', 'revision_url', 'default_branch')):
         raise Invalid('investigation state incomplete; preserve it before retry')
@@ -149,6 +154,8 @@ def refresh(cfg: Config) -> dict:
     if not lead:
         raise Invalid('no selected repository; run research-repo first')
     result = collect_selected(cfg, lead, research_session.allowance(cfg) if cfg.repo_first else cfg.discovery_read_budget_seconds)
+    if lead.get('clone') and lead.get('contribution_base', {}) != result.get('contribution_base', {}):
+        raise Invalid('reviewed contribution base changed; preserve existing selected source')
     data['lead'] = result
     _save(cfg, data)
     return result
@@ -163,12 +170,18 @@ def collect_selected(cfg: Config, lead: dict, seconds: float) -> dict:
         outside = acceptance.evidence(repo)
         recorded = policy_review._load(cfg).get(repo.lower(), {})
         extras = recorded.get('extra_paths', [])
-        snapshot = policy_review.snapshot(repo, extra_paths=extras) if extras else policy_review.snapshot(repo)
+        name = policy_review.reviewed_branch(recorded)
+        kwargs = {"ref": name} if name is not None else {}
+        snapshot = policy_review.snapshot(repo, extra_paths=extras, **kwargs) if extras else policy_review.snapshot(repo, **kwargs)
         info = gh.api(f'repos/{repo}', fresh=True)
         branch = info.get('default_branch')
         if not branch or not info.get('html_url'):
             raise Invalid('default branch identity unavailable; preserve lead')
-        tip = gh.api(f'repos/{repo}/commits/{branch}', fresh=True)
+        selected_branch = name or branch
+        from . import contribution_base
+        tip = gh.api(contribution_base.commit_path(repo, selected_branch), fresh=True)
+        if name is not None and (snapshot.get('contribution_base') != recorded['contribution_base'] or tip.get('sha') != recorded['contribution_base']['revision']):
+            raise Invalid('reviewed contribution branch moved; re-review policy and selected source')
         if not tip.get('sha') or not tip.get('html_url'):
             raise Invalid('default branch revision unavailable; preserve lead')
         suitability = repo_suitability.assess(repo, tip['sha'], snapshot)
@@ -182,16 +195,21 @@ def collect_selected(cfg: Config, lead: dict, seconds: float) -> dict:
     if snapshot['agent_review']:
         reasons.append('agent-specific contribution restriction needs review')
     result = {**lead, 'status': 'repo_review_needed', 'url': info['html_url'],
+              'contribution_base': recorded.get('contribution_base'),
               'default_branch': branch, 'revision': tip['sha'], 'revision_url': tip['html_url'],
               'health': asdict(health), 'outside_contributions': asdict(outside),
               'policy': snapshot, 'code_suitability': suitability, 'holds': reasons,
               'requirements': ['read full policy documents and linked contribution guides',
+                               'resolve this repository PR base semantically from current instructions, never a global main/dev rule',
+                               'record policy-review --accept --contribution-branch EXACT_BRANCH with source-backed note; if docs are unclear, inspect recent merged PR base refs and workflow configuration; hold only on remaining conflict/insufficient evidence, never override explicit rules',
                                'merge samples and stars are not permission or bug proof',
                                'check feasibility of native reproduction before selecting work',
                                'IDE AI must inspect code, diagnose and reproduce a useful bug',
                                'search issues, all-state PRs and recent commits before a patch',
                                'issue age alone never clears claims, assignment or policy',
                                'no code handoff or publication approval is created here']}
+    if result.get("contribution_base") is None:
+        result.pop("contribution_base", None)
     return result
 
 
@@ -258,7 +276,10 @@ def begin(cfg: Config) -> dict:
 
     No finding, queue item, patch or permission is manufactured by this step.
     """
+    previous = load(cfg)['lead']
     lead = refresh(cfg)
+    if previous and previous.get('clone') and previous.get('contribution_base', {}) != lead.get('contribution_base', {}):
+        raise Invalid('reviewed contribution base changed; preserve existing checkout and inspect')
     prep_review = policy_review.preparation_review(cfg, lead['repo'], lead['policy'])
     prep = bool(prep_review and (lead['policy']['anti_ai'] or lead['policy'].get('agent_review') or prep_review.get('prohibited')))
     blocking = [h for h in lead['holds'] if not (prep and h in {'literal contribution prohibition; do not target', 'agent-specific contribution restriction needs review'})]
@@ -287,7 +308,7 @@ def begin(cfg: Config) -> dict:
     if blocked:
         raise Invalid(blocked)
     try:
-        clone = hunt.clone(cfg, lead['repo'])
+        clone = hunt.clone(cfg, lead['repo'], contribution_base=lead['contribution_base']) if lead.get('contribution_base') else hunt.clone(cfg, lead['repo'])
     except (RuntimeError, OSError) as exc:
         raise Invalid(f'checkout unavailable; preserve it and inspect: {exc}') from exc
     try:
@@ -297,7 +318,7 @@ def begin(cfg: Config) -> dict:
     if tip != lead['revision']:
         raise Invalid('checkout differs from current selected revision; preserve it and inspect, never reset')
     try:
-        snapshot = evidence.capture(clone, tip, [])
+        snapshot = evidence.capture(clone, tip, [], **({'contribution_base': lead['contribution_base']} if lead.get('contribution_base') else {}))
     except evidence.StaleEvidence as exc:
         raise Invalid(f'checkout changed; preserve it and inspect: {exc}') from exc
     data = load(cfg)
@@ -350,7 +371,7 @@ def propose(cfg: Config, path: str, line: int, detail: str, source_issue: int = 
     if line > len(file.read_text(errors='replace').splitlines()):
         raise Invalid('candidate line is outside the selected file')
     try:
-        current = evidence.capture(root, lead['base'], [])
+        current = evidence.capture(root, lead['base'], [], **({'contribution_base': lead['contribution_base']} if lead.get('contribution_base') else {}))
     except evidence.StaleEvidence as exc:
         raise Invalid(f'investigation checkout changed; preserve it and inspect: {exc}') from exc
     if any(current[k] != lead['checkout'][k] for k in ('tree', 'branch', 'base')):
@@ -366,7 +387,7 @@ def propose(cfg: Config, path: str, line: int, detail: str, source_issue: int = 
         restriction = repo_access.pr_restriction(lead['repo'])
         if restriction:
             raise Invalid(restriction)
-        tip = gh.api(f"repos/{lead['repo']}/commits/{lead['default_branch']}", fresh=True)
+        tip = gh.api(f"repos/{lead['repo']}/commits/{quote((lead.get('contribution_base') or {}).get('branch', lead['default_branch']), safe='')}", fresh=True)
         if tip.get('sha') != lead['revision']:
             raise Invalid('upstream changed during investigation; preserve checkout and refresh before proposing')
         source = None
@@ -400,7 +421,7 @@ def propose(cfg: Config, path: str, line: int, detail: str, source_issue: int = 
             if source.get('html_url') != f"https://github.com/{lead['repo']}/issues/{source_issue}":
                 raise Invalid('source issue URL identity mismatch')
             matches = [m for m in matches if m.number != source_issue or m.is_pr]
-        commits = dedupe.recent_commit_hits(lead['repo'], path, dedupe.evidence_terms(detail, detail), strict=True)
+        commits = dedupe.recent_commit_hits(lead['repo'], path, dedupe.evidence_terms(detail, detail), strict=True, **({'ref': lead['contribution_base']['revision']} if lead.get('contribution_base') else {}))
         hits = {}
         for match in matches:
             hits[str(match.number)] = {'url': match.url, 'title': match.title,
@@ -414,7 +435,7 @@ def propose(cfg: Config, path: str, line: int, detail: str, source_issue: int = 
     # Pre-coding review is separate from verified publication duplicate reviews.
     # Every retry repeats live search, policy, tip and clean-checkout checks above.
     context = {'repo': lead['repo'], 'research_id': lead.get('research_id', ''), 'base': lead['base'], 'checkout': current,
-               'path': path, 'line': line, 'detail': detail, 'source_issue': source_issue}
+               'path': path, 'line': line, 'detail': detail, 'source_issue': source_issue, **({'contribution_base': lead['contribution_base']} if lead.get('contribution_base') else {})}
     fingerprint = hashlib.sha256(json.dumps(context, sort_keys=True).encode()).hexdigest()
     prior = issue_reviews.load(cfg.path('research_source_review.json'))
     reviews = prior.get('reviews', {}) if prior.get('fingerprint') == fingerprint else {}
@@ -436,7 +457,7 @@ def propose(cfg: Config, path: str, line: int, detail: str, source_issue: int = 
     item = Item(id_, lead['repo'], path, line, 'issue' if source_issue else 'ide-hypothesis', detail.strip(),
                 status='clean', clone=str(root), notes=['IDE source-reviewed hypothesis, not bug proof',
                                                      lead['revision_url']] + ([source['html_url']] if source else []),
-                source_issue=source_issue, research_id=lead.get('research_id', ''), snippet=hunt.snippet(root, path, line))
+                source_issue=source_issue, research_id=lead.get('research_id', ''), contribution_base=lead.get('contribution_base'), snippet=hunt.snippet(root, path, line))
     queue.add(item)
     queue.save()
     return {'status': 'candidate', 'id': id_, 'warning': 'must check current issues/PRs/commits and reproduce before editing; submit independently rechecks duplicates'}
@@ -482,7 +503,7 @@ def review_source(cfg: Config, source: str, reason: str) -> dict:
         raise Invalid('source is not a pending exact issue number or full commit SHA')
     preparation.public_guard(Path(lead['clone']))
     try:
-        current = evidence.capture(Path(lead['clone']), lead['base'], [])
+        current = evidence.capture(Path(lead['clone']), lead['base'], [], **({'contribution_base': lead['contribution_base']} if lead.get('contribution_base') else {}))
     except evidence.StaleEvidence as exc:
         raise Invalid(f'checkout changed; preserve work and repeat proposal after recovery: {exc}') from exc
     if current != context.get('checkout') or lead['base'] != context.get('base'):
@@ -492,7 +513,7 @@ def review_source(cfg: Config, source: str, reason: str) -> dict:
         if why:
             raise Invalid(why)
         _coding_route(cfg, lead['repo'])
-        if gh.api(f"repos/{lead['repo']}/commits/{lead['default_branch']}", fresh=True).get('sha') != lead['revision']:
+        if gh.api(f"repos/{lead['repo']}/commits/{quote((lead.get('contribution_base') or {}).get('branch', lead['default_branch']), safe='')}", fresh=True).get('sha') != lead['revision']:
             raise Invalid('upstream changed; refresh investigation before source review')
         snapshot = (_source_snapshot(lead['repo'], int(source)) if source.isdecimal()
                     else duplicate_reviews.commit_snapshot(lead['repo'], source))
@@ -532,7 +553,7 @@ def checkpoint(cfg: Config, prefix: list[str]) -> dict:
             valid = (context.get('research_id', '') == data['lead'].get('research_id', '') and
                      hashlib.sha256(json.dumps(context, sort_keys=True).encode()).hexdigest() == review.get('fingerprint'))
             try:
-                current = evidence.capture(Path(data['lead']['clone']), data['lead']['base'], [])
+                current = evidence.capture(Path(data['lead']['clone']), data['lead']['base'], [], **({'contribution_base': data['lead']['contribution_base']} if data['lead'].get('contribution_base') else {}))
             except evidence.StaleEvidence:
                 current = None
             valid = valid and current == context.get('checkout') and data['lead']['base'] == context.get('base')
@@ -547,4 +568,6 @@ def checkpoint(cfg: Config, prefix: list[str]) -> dict:
             'lead': data['lead'], 'next_argv': prefix + ['research-repo'] if not data['lead'] else
             prefix + ['research-repo', '--refresh'],
             'after_source_review_argv': prefix + ['research-repo', '--begin'] if data['lead'] else None,
+            'base_resolution': {'mode': 'repo-specific source review by the coding agent', 'review_command': prefix + ['policy-review', data['lead']['repo'], '--accept', '--contribution-branch', 'EXACT_REVIEWED_BRANCH', '--note', 'SOURCE_PATHS_AND_REASON'],
+                                'unresolved': 'inspect same-repo recent merged PR bases, branch docs and workflow config first; explicit rules win, hold only if evidence still conflicts or is insufficient'} if data['lead'] else None,
             'warning': 'repository research, not a code task or permission; inspect sources and policy before proceeding'}

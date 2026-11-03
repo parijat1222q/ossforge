@@ -309,3 +309,22 @@ def test_ca_read_errors_are_clean_refusals(tmp_path, monkeypatch, error):
     monkeypatch.setattr(Path, 'read_text', fail)
     with pytest.raises(environment.Invalid, match='cannot be read safely'):
         environment._system_inputs()
+
+
+def test_explicit_base_actual_setup_receipt_and_same_sha_swap_refusal(setup):  # noqa: F811
+    from ossforge import submit
+    cfg,q,source,recipe_file,recipe=setup
+    available(source)
+    base=git(source,'rev-parse','origin/HEAD')
+    git(source,'update-ref','refs/remotes/origin/ABCD',base)
+    selected={'repo':q.items['i'].repo,'branch':'ABCD','revision':base}
+    q.items['i'].contribution_base=selected
+    q.save()
+    out=environment.prepare(cfg,q,'i',recipe_file)
+    rec=environment.status(cfg,q,'i',Path(out['receipt_file']))
+    assert rec['contribution_base']==rec['checkout']['contribution_base']==selected
+    git(source,'update-ref','refs/remotes/origin/other',base)
+    q.items['i'].contribution_base={**selected,'branch':'other'}
+    with pytest.raises(ValueError,match='identity'):
+        environment.status(cfg,q,'i',Path(out['receipt_file']))
+    assert submit._item_base(q.items['i'])==base  # same SHA is not enough for receipt reuse
