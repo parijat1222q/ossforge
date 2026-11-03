@@ -17,6 +17,19 @@ Do not start a nested model process just because you are already an AI assistant
 > doctor and whoami. Do not change identity, authentication or a STOP marker to
 > make progress. Ask only for an unresolved prerequisite or approval.
 >
+> Before coding, resolve this discovered repository's PR base from its current
+> contribution rules and linked guides. Do this source review yourself; do not
+> ask the owner to name a branch already stated by the project. There is no global
+> main/dev rule and no repository-name exception. For main, dev or any other exact
+> branch, record `policy-review REPO --accept --contribution-branch EXACT_BRANCH
+> --publication-route ROUTE --note SOURCE_PATHS_AND_REASON`. This pins the branch's
+> current revision and policy documents. If instructions do not settle the base, inspect recent merged PR base refs,
+> branch-specific contribution docs and workflow configuration in this same repo.
+> Explicit current maintainer rules outrank weaker activity clues. Hold only if
+> this evidence remains insufficient or conflicting; do not guess or immediately
+> ask the owner to do the investigation. A reviewed branch is source
+> identity, not permission to publish or an assertion of human review.
+>
 > Before publication, read the current contribution rules and linked guides.
 > Record the source-backed publication route with `policy-review --accept
 > --publication-route ROUTE --note ...`; pin linked in-repository guides using
@@ -446,7 +459,7 @@ Saved issue batches and issue cursors are not modified by repository research.
 Follow `agent-next` as usual:
 
 - `repo_research`: run `research-repo` to select one repository and collect its
-  health, outside-contributor merge sample, current default-branch revision and
+  health, outside-contributor merge sample, current source revision and
   policy documents. Read the evidence and its limitations. Popularity, a health
   score or a prior outside merge is not permission or proof that useful work
   exists. Evaluate native-test feasibility and linked external contribution
@@ -457,7 +470,12 @@ Follow `agent-next` as usual:
 - After source review, `research-repo --begin` rechecks current policy, repository
   restrictions and health. It requires a current normal `issue_pr` or `pr_only`
   policy-review route, then creates or inspects a clean checkout at the selected
-  exact revision. A stale or incomplete checkout is preserved and refused.
+  exact revision. A reviewed explicit base is separate from the GitHub default;
+  its repository, branch and pinned SHA travel through tasks, queue, native
+  verification, environment receipts and PR creation. A stale, moved, malformed
+  or incomplete identity is refused, not repinned or reset. Legacy items without
+  explicit identity keep their existing default-base behavior. A stale or
+  incomplete checkout is preserved and refused.
 - `repo_investigation`: begin runs the built-in deterministic Python candidate
   scan and returns at most eight compact source hints. Review those first and
   use targeted AI reasoning for unresolved behavior, causes and possible fixes.

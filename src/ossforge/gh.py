@@ -323,13 +323,13 @@ def cache_put(key: str, value: Any) -> None:
         cp.write_text(json.dumps(value), encoding="utf-8")
 
 
-def existing_files(repo: str, paths: tuple[str, ...], *, fresh: bool = False, strict: bool = False) -> list[str]:
+def existing_files(repo: str, paths: tuple[str, ...], *, fresh: bool = False, strict: bool = False, ref: str | None = None) -> list[str]:
     """Which of `paths` exist, using one directory listing per parent (3 calls) instead of one probe per path."""
     parents = {p.rsplit("/", 1)[0] if "/" in p else "" for p in paths}
     present: set[str] = set()
     for d in parents:
         try:
-            listing = api(f"repos/{repo}/contents/{d}".rstrip("/"), fresh=fresh)
+            listing = api(f"repos/{repo}/contents/{d}".rstrip("/"), fresh=fresh, **({"ref": ref} if ref is not None else {}))
         except RateLimited:
             raise
         except GhError as exc:

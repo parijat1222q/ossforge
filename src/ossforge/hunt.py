@@ -15,11 +15,13 @@ from .queue import Item, Queue, item_id
 TOP_PER_REPO = 8
 
 
-def clone(cfg: Config, repo: str) -> Path:
+def clone(cfg: Config, repo: str, *, contribution_base: dict | None = None) -> Path:
+    from . import contribution_base as cb
+    selected = cb.validate(contribution_base, repo) if contribution_base is not None else {}
     dest = Path(cfg.work_dir) / repo.replace("/", "__")
     if not dest.exists():
         try:
-            subprocess.run(["git", "clone", "--depth", "50", f"https://github.com/{repo}", str(dest)],
+            subprocess.run(["git", "clone", "--depth", "50", *(["--branch", selected["branch"], "--single-branch"] if selected else []), "--", f"https://github.com/{repo}", str(dest)],
                            check=True, capture_output=True, timeout=300)
         except subprocess.TimeoutExpired as exc:
             # Only this attempt created the destination. Never reuse its partial checkout.
@@ -48,6 +50,12 @@ def clone(cfg: Config, repo: str) -> Path:
         problems = identity.check_upstream(str(dest), repo)
         if problems:
             raise RuntimeError("; ".join(problems) + "; existing checkout preserved")
+    if selected:
+        from . import submit
+        probe = Item("clone", repo, "", 0, "", "", clone=str(dest), contribution_base=selected)
+        submit._item_base(probe)
+        if submit._run(["git", "rev-parse", "HEAD"], str(dest)) != selected["revision"]:
+            raise RuntimeError("existing checkout differs from pinned contribution base; preserve it")
     from .preparation import public_guard
     public_guard(dest)
     return dest

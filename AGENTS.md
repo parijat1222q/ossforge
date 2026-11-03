@@ -39,6 +39,22 @@ Do not nest another model when you are already the external IDE assistant.
   A static finding from `ossforge hunt` is only a candidate until you have read the code and reproduced it.
   Reject false positives with `ossforge reject ID --reason "..."`.
 
+## Repository-specific contribution base
+
+Before coding, resolve the PR base for the selected repository from its current
+contribution instructions and linked guides. Do not hardcode main, dev or a
+repository-name exception. If docs do not settle it, inspect same-repository
+recent merged PR base refs, branch-specific guides and workflow configuration.
+Explicit current maintainer rules win over weaker activity clues. Investigate
+before asking the owner; hold if evidence still conflicts or is insufficient.
+Record the source paths and reasoning with `policy-review REPO --accept
+--contribution-branch EXACT_BRANCH --publication-route ROUTE --note ...`.
+The record pins repo/branch/revision and policy document SHAs, not publication
+authority or an assertion that the owner reviewed the code. Preserve that exact
+identity in tasks/results and verification; changed refs require fresh review,
+never a reset, silent repin or default-branch workaround. Legacy queue items
+without explicit base identity keep their default behavior.
+
 ## 2. Writing the fix
 
 - Work in the clone path shown by `ossforge queue`. Run `ossforge prepare ID` first: it sets that work tree's

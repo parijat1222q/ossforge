@@ -80,7 +80,7 @@ def begin(cfg, lead, review):
             raise ValueError('existing preparation must be inspected; never overwrite it')
         return task(cfg)
     local_cfg = dataclasses.replace(cfg, work_dir=str(Path(cfg.work_dir) / 'local-preparation'))
-    root = hunt.clone(local_cfg, lead['repo'])
+    root = hunt.clone(local_cfg, lead['repo'], contribution_base=lead['contribution_base']) if lead.get('contribution_base') else hunt.clone(local_cfg, lead['repo'])
     tip = submit._run(['git', 'rev-parse', 'HEAD'], str(root))
     if tip != lead['revision']:
         raise ValueError('preparation revision differs; preserve checkout')

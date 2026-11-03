@@ -38,6 +38,7 @@ class Item:
     rank: float = 0.0
     hold_reason: str = ""  # unresolved clean work, not a detector false positive
     research_id: str = ""  # exact originating repo investigation, not clone-path identity
+    contribution_base: dict | None = None  # exact reviewed repo/branch/revision; empty legacy only
     snippet: str = ""  # a few lines around the finding so a human can accept or reject it quickly
 
 
@@ -62,6 +63,9 @@ class Queue:
             for row in rows:
                 if not isinstance(row, dict):
                     raise ValueError("queue entries must be objects")
+                if "contribution_base" in row:
+                    from . import contribution_base
+                    contribution_base.validate(row["contribution_base"], row.get("repo"), explicit=True)
                 item = Item(**row)
                 if not isinstance(item.id, str) or not item.id or item.id in self.items or item.status not in STATUSES:
                     raise ValueError("invalid or repeated item ID/status")
@@ -76,7 +80,7 @@ class Queue:
             with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.path.parent,
                                              prefix=self.path.name + ".", delete=False) as out:
                 temp = Path(out.name)
-                json.dump([asdict(i) for i in self.items.values()], out, indent=1)
+                json.dump([{k: v for k, v in asdict(i).items() if k != "contribution_base" or v is not None} for i in self.items.values()], out, indent=1)
                 out.flush()
                 os.fsync(out.fileno())
             temp.replace(self.path)

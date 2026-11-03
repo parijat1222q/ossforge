@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import preparation, evidence, submit, verify
+from . import contribution_base as cb, preparation, evidence, submit, verify
 from .queue import Queue
 
 
@@ -25,12 +25,15 @@ def task(queue: Queue, item_id: str | None = None) -> dict:
         preparation.public_guard(clone)
     except ValueError as exc:
         raise Invalid(str(exc)) from exc
-    base = submit._base(str(clone))
-    snapshot = evidence.capture(clone, base, [])  # refuse dirty/detached candidates before spending a driver attempt
-    return {'schema': 1, 'status': 'ready', 'id': item.id, 'repo': item.repo,
+    base = submit._item_base(item)
+    selected = cb.of(item)
+    snapshot = evidence.capture(clone, base, [], **({"contribution_base": selected} if selected else {}))  # refuse dirty/detached candidates before spending a driver attempt
+    result = {'schema': 1, 'status': 'ready', 'id': item.id, 'repo': item.repo,
             'clone': str(clone.resolve()), 'base': base, 'candidate': item.detail,
             'path': item.path, 'line': item.line, 'notes': item.notes, 'source_issue': item.source_issue,
             'requirements': ['candidate is not proof of a bug', 'read repository contribution policy',
+                             'resolve PR base from this repository current instructions, never hardcode main/dev; preserve recorded contribution_base exactly',
+                             'if instructions are unclear, inspect same-repo merged PR bases and workflows; hold on unresolved conflict/insufficient evidence or assigned-base mismatch before editing',
                              'check issues, pull requests and recent commits for duplicates',
                              'write a regression test and minimal source fix on a new local branch',
                              'inside agent-run return optional commit_message for parent-owned identity-checked commit; no nested state-mutating CLI',
@@ -44,6 +47,11 @@ def task(queue: Queue, item_id: str | None = None) -> dict:
                                    'tree': snapshot['tree'], 'outcome': 'hold', 'reason': 'specific unmet prerequisite and evidence'},
             'next': 'agent-verify RESULT.json; hold needs unchanged checkout; a fix needs actual verification before separate submit'}
 
+    if selected:
+        for obj in (result, result['result_schema'], result['hold_result_schema']):
+            cb.bind(obj, selected)
+    return result
+
 
 KEYS = {'schema', 'id', 'base', 'branch', 'test_command', 'check_commands', 'failure_code',
         'issue_title', 'issue_body', 'pr_title', 'pr_body', 'consent_issue'}
@@ -56,13 +64,17 @@ def parse(path: Path) -> dict:
         data = json.loads(path.read_text(encoding='utf-8'))
     except (ValueError, UnicodeError) as exc:
         raise Invalid('result must be UTF-8 JSON') from exc
+    selected = None
+    if isinstance(data, dict) and 'contribution_base' in data:
+        selected = cb.validate(data['contribution_base'], data['contribution_base'].get('repo') if isinstance(data['contribution_base'], dict) else '', explicit=True)
+        data = {k:v for k,v in data.items() if k != 'contribution_base'}
     if isinstance(data, dict) and data.get('outcome') == 'hold':
         if set(data) != {'schema', 'id', 'base', 'branch', 'tree', 'outcome', 'reason'} or type(data['schema']) is not int or data['schema'] != 1:
             raise Invalid('hold result must match exact schema 1 keys')
         for key in ('id', 'base', 'branch', 'tree', 'reason'):
             if not isinstance(data[key], str) or not data[key].strip() or '\x00' in data[key]:
                 raise Invalid(f'{key} must be nonempty text without NUL')
-        return data
+        return cb.bind(data, selected)
     if not isinstance(data, dict) or set(data) not in (KEYS, KEYS | {'commit_message', 'commit_paths'}) or type(data['schema']) is not int or data['schema'] != 1:
         raise Invalid('result must match exact schema 1 keys')
     if 'commit_message' in data and (not isinstance(data['commit_message'], str) or not data['commit_message'].strip() or len(data['commit_message']) > 4000 or '\x00' in data['commit_message']):
@@ -86,7 +98,7 @@ def parse(path: Path) -> dict:
     for command in [data['test_command'], *data['check_commands']]:
         if not isinstance(command, list) or not command or any(not isinstance(v, str) or not v or '\x00' in v for v in command):
             raise Invalid('commands must be nonempty string argv lists, never shell strings')
-    return data
+    return cb.bind(data, selected)
 
 
 def complete(queue: Queue, result: dict, *, isolation_mode: str = "none", readonly_paths: list[str] | None = None) -> dict:
@@ -100,10 +112,12 @@ def complete(queue: Queue, result: dict, *, isolation_mode: str = "none", readon
         preparation.public_guard(clone)
     except ValueError as exc:
         raise Invalid(str(exc)) from exc
-    base = submit._base(str(clone))
+    selected = cb.of(item)
+    cb.check(result, selected)
+    base = submit._item_base(item)
     if base != result['base']:
         raise Invalid('base changed; refresh task and recheck the patch')
-    current = evidence.capture(clone, base, [])
+    current = evidence.capture(clone, base, [], **({"contribution_base": selected} if selected else {}))
     if result.get('outcome') == 'hold':
         if item.submitted:
             raise Invalid('hold cannot hide partial publication; reconcile it first')
@@ -116,7 +130,7 @@ def complete(queue: Queue, result: dict, *, isolation_mode: str = "none", readon
     if current['branch'] != result['branch']:
         raise Invalid('result branch does not match active checkout')
     outcome = verify.verify_fix(clone, base, Path('unused'), [], test_command=result['test_command'],
-                                check_commands=result['check_commands'], failure_code=result['failure_code'], isolation_mode=isolation_mode, readonly_paths=readonly_paths)
+                                check_commands=result['check_commands'], failure_code=result['failure_code'], isolation_mode=isolation_mode, readonly_paths=readonly_paths, **({"contribution_base": selected} if selected else {}))
     if not outcome.ok:
         return {'schema': 1, 'status': 'verification_failed', 'id': item.id, 'log': outcome.log}
     queue.set(item.id, status='verified', branch=result['branch'], verification=outcome.evidence,

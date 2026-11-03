@@ -782,3 +782,23 @@ def test_post_rename_directory_fsync_failure_visible_committed_retry_authoritati
     monkeypatch.setattr(rc,'_target',lambda *a:pytest.fail('committed retry read remote'))
     monkeypatch.setattr(rc.uuid,'uuid4',lambda:pytest.fail('committed retry allocated clone'))
     assert rc.another(cfg,'one') == outcome
+
+
+def test_explicit_source_continuation_archives_and_retains_base_identity(transition,monkeypatch,capsys):
+    from ossforge import cli
+    rc,cfg,old,lead,target,config=transition
+    git(old,'branch','ABCD',target['revision'])
+    selected={'repo':lead['repo'],'branch':'ABCD','revision':target['revision']}
+    target['contribution_base']=selected
+    original=rc._clone
+    def clone(c,t,d):
+        original(c,t,d)
+        git(d,'switch','ABCD')
+    monkeypatch.setattr(rc,'_clone',clone)
+    assert cli.main(['--config',str(config),'research-repo','--another-investigation','explicit'])==0
+    capsys.readouterr()
+    new=repo_research.load(cfg)
+    assert new['lead']['contribution_base']==selected
+    assert new['lead']['checkout']['contribution_base']==selected
+    assert new['lead']['default_branch']=='main'
+    assert new['continuation_outcomes']['explicit']['target']['contribution_base']==selected

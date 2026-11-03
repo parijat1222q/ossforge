@@ -92,14 +92,14 @@ def find_matches(repo: str, title: str, body: str, path: str, symbols: list[str]
     return sorted(seen.values(), key=lambda m: -m.score)
 
 
-def recent_commit_hits(repo: str, path: str, keywords: list[str], days: int = 45, *, strict: bool = False) -> list[str]:
+def recent_commit_hits(repo: str, path: str, keywords: list[str], days: int = 45, *, strict: bool = False, ref: str | None = None) -> list[str]:
     """Commits touching `path` recently whose message shares keywords with the finding:
     someone may already have fixed it on main."""
     from datetime import datetime, timedelta, timezone
 
     since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
-        commits = gh.api(f"repos/{repo}/commits", path=path, since=since, per_page=100 if strict else 20, fresh=strict) or []
+        commits = gh.api(f"repos/{repo}/commits", path=path, since=since, per_page=100 if strict else 20, fresh=strict, **({"sha": ref} if ref is not None else {})) or []
     except gh.GhError as exc:
         if strict:
             raise Incomplete("recent commit check unavailable") from exc

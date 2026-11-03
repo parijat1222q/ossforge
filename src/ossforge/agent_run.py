@@ -10,7 +10,7 @@ import time
 from datetime import date
 from pathlib import Path
 
-from . import policy_review, preparation, identity, driver, loop, runs, safety, submit, verify, evidence
+from . import contribution_base as cb, policy_review, preparation, identity, driver, loop, runs, safety, submit, verify, evidence
 from .config import Config
 from .limiter import DailyLimiter
 from .queue import Queue
@@ -61,6 +61,7 @@ def _run(cfg, command, timeout, attempts, execute, discover, journal):
                     'reason': journal.data['outcome'], 'candidate_status': 'no_work'}
         return job
     item_id = job['id']
+    item = q.items[item_id]
     if job['status'] != 'resume_verified':
         ledger_path = cfg.path('driver-attempts.json')
         try:
@@ -91,7 +92,7 @@ def _run(cfg, command, timeout, attempts, execute, discover, journal):
         folder.mkdir(parents=True)
         task_file, result_file = folder / 'task.json', folder / 'result.json'
         job['assigned_head'] = evidence._git(Path(job['clone']), 'rev-parse', 'HEAD')
-        job['assigned_checkout'] = evidence.capture(Path(job['clone']), job['base'], [])
+        job['assigned_checkout'] = evidence.capture(Path(job['clone']), job['base'], [], **({'contribution_base': item.contribution_base} if item.contribution_base else {}))
         task_file.write_text(json.dumps(job, indent=2), encoding='utf-8')
         journal.note(f'driver: starting {item_id}; timeout {timeout}s')
         started = time.monotonic()
@@ -110,6 +111,8 @@ def _run(cfg, command, timeout, attempts, execute, discover, journal):
             journal.data['outcome'] = 'driver_failed'
             return {'status': 'driver_failed', 'id': item_id, 'exit_code': rc}
         result = driver.parse(result_file)
+        cb.check(result, cb.of(item))
+        cb.check(job, cb.of(item))
         if result.get('outcome') == 'hold' and any(result.get(k) != job['hold_result_schema'][k] for k in ('branch', 'tree')):
             raise driver.Invalid('hold result does not match assigned snapshot')
         if result['id'] != item_id or result['base'] != job['base']:
@@ -126,7 +129,7 @@ def _run(cfg, command, timeout, attempts, execute, discover, journal):
             return checked
     item = q.items[item_id]
     if job['status'] == 'resume_verified':
-        evidence.check(Path(item.clone), submit._base(item.clone), item.branch, item.verification)
+        evidence.check(Path(item.clone), submit._item_base(item), item.branch, item.verification, **({'contribution_base': item.contribution_base} if item.contribution_base else {}))
     if not execute:
         journal.note('verified patch retained; publication not enabled')
         return {'status': 'verified_not_submitted', 'id': item_id}
@@ -155,15 +158,22 @@ def _commit_result(cfg, queue, job, result, journal):
     from dataclasses import asdict
     if not item or not assigned or asdict(item) != asdict(assigned) or item.status != 'clean' or item.submitted:
         raise driver.Invalid('assigned queue changed before commit; preserve patch')
+    cb.check(job, cb.of(item))
+    cb.check(result, cb.of(item))
     clone = Path(job['clone'])
     if (clone.is_symlink() or any(p.is_symlink() for p in clone.parents)
             or Path(evidence._git(clone, 'rev-parse', '--show-toplevel')).resolve() != clone
             or Path(item.clone).resolve() != clone):
         raise driver.Invalid('assigned Git root changed before commit')
     preparation.public_guard(clone)
-    if (submit._base(str(clone)) != job['base'] or result['base'] != job['base']
+    default_probe = subprocess.run(['git', 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], cwd=clone, capture_output=True, text=True)
+    if default_probe.returncode and (not item.contribution_base or default_probe.returncode != 1):
+        raise driver.Invalid('default branch guard unavailable; preserve patch')
+    default_branch = default_probe.stdout.strip().removeprefix('origin/') if not default_probe.returncode else None
+    if (submit._item_base(item) != job['base'] or result['base'] != job['base']
             or evidence._git(clone, 'symbolic-ref', '--short', 'HEAD') != result['branch']
-            or result['branch'] == evidence._git(clone, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD').removeprefix('origin/')
+            or (item.contribution_base and result['branch'] == item.contribution_base['branch'])
+            or result['branch'] == default_branch
             or evidence._git(clone, 'rev-parse', 'HEAD') != job['assigned_head']
             or evidence._git(clone, 'rev-parse', 'HEAD^{tree}') != job['assigned_checkout']['tree']):
         raise driver.Invalid('assigned HEAD/base/tree or result branch changed before commit')

@@ -328,3 +328,29 @@ def test_actual_submit_wrapper_excludes_native_completion(setup, tmp_path, monke
         return {'held_fixture': True}
     monkeypatch.setattr(submit,'_submit',publication)
     assert submit.submit(q.items['i'],DailyLimiter(cfg.path('daily.json'),2),cfg,Audit(cfg.path('audit.jsonl')),execute=True) == {'held_fixture':True}
+
+
+def test_explicit_base_native_completion_binds_dependency_snapshot(completion,monkeypatch):
+    cfg,q,source,runtime,receipt,spec,proposal=completion
+    from test_environment import git
+    selected={'repo':q.items['i'].repo,'branch':'ABCD','revision':proposal['base']}
+    git(source,'update-ref','refs/remotes/origin/ABCD',proposal['base'])
+    q.items['i'].contribution_base=selected
+    proposal['contribution_base']=selected
+    # Fixture status is a current source receipt stand-in; real setup/status has
+    # a separate native namespace test in test_environment.
+    from ossforge import contribution_base as cb
+    rec=environment.status(cfg,q,'i',receipt)
+    cb.bind(rec,selected)
+    cb.bind(rec['checkout'],selected)
+    receipt.write_text(json.dumps(rec))
+    replay_file=receipt.parent/'replay/result.json'
+    replay=json.loads(replay_file.read_text())
+    replay['setup_receipt_sha256']=environment._digest(receipt)
+    replay_file.write_text(json.dumps(replay))
+    # Update the fixture's replay return object, preserving actual dependency
+    # construction and checking below.
+    monkeypatch.setattr(native_replay,'replay',lambda *a:replay)
+    result=native_replay.complete(cfg,q,proposal,receipt,spec)
+    assert result['evidence']['contribution_base']==selected
+    evidence.check(source,proposal['base'],proposal['branch'],q.items['i'].verification,contribution_base=selected)

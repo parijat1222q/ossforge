@@ -45,7 +45,7 @@ def next_step(cfg: Config, queue: Queue, config_path: str, scope: str = 'default
         if item.submitted.get("pr_url") or item.submitted.get("pr"):
             continue
         try:
-            evidence.check(Path(item.clone), submit._base(item.clone), item.branch, item.verification)
+            evidence.check(Path(item.clone), submit._item_base(item), item.branch, item.verification, **({"contribution_base": item.contribution_base} if item.contribution_base else {}))
         except (ValueError, evidence.StaleEvidence, submit.Refused, OSError) as exc:
             return result("inspect_local", id=item.id, clone=item.clone, reason=str(exc),
                           warning="preserve work; inspect changes and rerun verification, never reset automatically")
