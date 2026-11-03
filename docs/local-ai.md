@@ -727,3 +727,27 @@ Python state; semantic review still matters. Other repository-native checks and
 submission/runtime revalidation remain separate, unresolved handoff work. A
 `python_replay_passed` result is deliberately not an `agent-verify` receipt.
 There is no generic language, installed-copy rebuild, IDE or full-workflow claim.
+
+### Explicit replay completion and later stale-input checks
+
+For this bounded Python route, `agent-verify RESULT.json --environment-receipt
+RECEIPT.json --replay-spec SPEC.json` reruns the replay rather than trusting a
+saved success. Supply both options together. The normal driver result supplies
+issue/PR draft fields, exact base and branch, an exact pytest command matching
+the replay selections, and optional check commands using the prepared Python
+interpreter. Other executables/runtimes require a separate reviewed route.
+
+Replay completion runs additional checks in the same offline read-only native
+boundary and validates source, runtime, public CA, wheel/source recipe inputs,
+setup receipt, observer and replay artifacts before promoting the queue item.
+The verification receipt records those dependencies. `agent-next`, submit dry
+runs and publication evidence gates refuse changed or missing dependencies.
+Evidence is checked immediately before issue creation, forking, pushing and PR
+creation, including resumed publication. Current identity, policy, duplicate,
+upstream and owner-authority gates remain independent.
+
+These remain unsigned local stale-state guards. Anyone able to rewrite both
+records and files is outside the guarantee. Other generic test-command routes
+retain their existing semantics; this is not a requirement that every possible
+runtime is prepared through this route, generic native-language support, proof
+that test assertions are useful, or actual IDE acceptance.
