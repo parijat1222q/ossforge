@@ -288,7 +288,11 @@ def test_changes_during_clone_never_promote_or_destroy(transition,monkeypatch,mu
             git(d,'config','user.name','Wrong')
         elif mutation == 'root':
             import shutil
-            shutil.rmtree(d/'.git')
+            import stat
+            def writable_remove(func, path, info):
+                __import__('os').chmod(path, stat.S_IWRITE)
+                func(path)
+            shutil.rmtree(d/'.git', onerror=writable_remove)
     monkeypatch.setattr(rc,'_clone',change)
     with pytest.raises((rc.Invalid,rc.evidence.StaleEvidence,research_session.Invalid)):
         rc.another(cfg,'one')
@@ -595,7 +599,7 @@ def test_production_clone_and_validation_with_local_transport_rewrite(prior_subm
     # The actual clone command runs unchanged. A test-only Git URL rewrite uses
     # this controlled local repository, never a network clone.
     gitconfig=tmp_path/'test-gitconfig'
-    gitconfig.write_text(f'[url "file://{old}"]\n insteadOf = https://github.com/org/repo\n')
+    gitconfig.write_text(f'[url "{old.as_uri()}"]\n insteadOf = https://github.com/org/repo\n')
     monkeypatch.setenv('GIT_CONFIG_GLOBAL',str(gitconfig))
     monkeypatch.setattr(rc.identity,'check_login',lambda c:[])
     target={**lead,'revision':git(old,'rev-parse','HEAD')}
@@ -619,7 +623,7 @@ def test_atomic_save_internal_failure_preserves_previous_durable_pointer(tmp_pat
     if boundary == 'fsync':
         monkeypatch.setattr(repo_research.os,'fsync',lambda *a:(_ for _ in ()).throw(OSError('fsync failure')))
     else:
-        monkeypatch.setattr(repo_research.Path,'replace',lambda *a:(_ for _ in ()).throw(OSError('rename failure')))
+        monkeypatch.setattr(repo_research.durability,'replace',lambda *a:(_ for _ in ()).throw(OSError('rename failure')))
     with pytest.raises(OSError):
         repo_research._save(cfg,{'schema':1,'cursor':1,'lead':None})
     assert cfg.path('repo_research.json').read_bytes() == raw
@@ -760,20 +764,18 @@ def test_deadline_expiring_in_final_local_clone_validation_never_promotes(transi
 
 
 def test_post_rename_directory_fsync_failure_visible_committed_retry_authoritative(transition,monkeypatch):
-    import os
-    import stat
     rc,cfg,old,lead,target,config=transition
-    real=repo_research.os.fsync
+    real=repo_research.durability.replace
     failed=[]
-    def fsync(fd):
-        is_dir=stat.S_ISDIR(os.fstat(fd).st_mode)
-        if is_dir and not failed:
-            visible=repo_research.load(cfg)
-            if visible.get('continuation_outcomes', {}).get('one'):
-                failed.append(True)
-                raise OSError('directory fsync failed after commit replacement')
-        return real(fd)
-    monkeypatch.setattr(repo_research.os,'fsync',fsync)
+    def replace(source, destination):
+        real(source, destination)
+        visible=repo_research.load(cfg)
+        if visible.get('continuation_outcomes', {}).get('one') and not failed:
+            failed.append(True)
+            raise OSError('directory fsync failed after commit replacement')
+    # Inject after the actual platform-specific replacement. Windows does not
+    # claim POSIX directory fsync; both OSes must recover visible committed state.
+    monkeypatch.setattr(repo_research.durability,'replace',replace)
     with pytest.raises(OSError,match='directory fsync'):
         rc.another(cfg,'one')
     visible=repo_research.load(cfg)

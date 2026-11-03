@@ -314,7 +314,7 @@ def test_actual_new_clone_pins_nondefault_branch_without_rewriting_default(check
     root,main,dev=checkout
     cfg=Config(work_dir=str(tmp_path/'work'),git_name='Fixture',git_email='fixture@example.invalid')
     gcfg=tmp_path/'gitconfig'
-    gcfg.write_text('[url "'+str(root)+'"]\n insteadOf = https://github.com/org/repo\n')
+    gcfg.write_text('[url "'+root.as_uri()+'"]\n insteadOf = https://github.com/org/repo\n')
     monkeypatch.setenv('GIT_CONFIG_GLOBAL',str(gcfg))
     selected={'repo':'org/repo','branch':'dev','revision':dev}
     new=hunt.clone(cfg,'org/repo',contribution_base=selected)

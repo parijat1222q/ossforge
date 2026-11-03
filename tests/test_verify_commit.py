@@ -1,3 +1,4 @@
+import os
 import subprocess
 from pathlib import Path
 
@@ -17,6 +18,7 @@ def _repo(tmp_path, monkeypatch):
     r = tmp_path / "r"
     r.mkdir()
     sh(r, "git", "init", "-q", "-b", "main")
+    sh(r, "git", "config", "core.symlinks", "true")
     (r / "m.py").write_text("def f():\n    return 1\n")
     sh(r, "git", "add", "-A")
     sh(r, "git", "commit", "-qm", "init")
@@ -212,11 +214,14 @@ def test_added_executable_source_keeps_mode_after_verification(tmp_path, monkeyp
     (r / 'm.py').write_text('from helper import value\n')
     (r / 'test_exec.py').write_text('from m import value\nassert value == 2\n')
     sh(r, 'git', 'add', '-A')
+    sh(r, 'git', 'update-index', '--chmod=+x', 'helper.py')
     sh(r, 'git', 'commit', '-qm', 'executable helper')
     result = verify.verify_fix(r, base, Path(sys.executable), [], test_command=[sys.executable, 'test_exec.py'])
     # The baseline import failure is not a qualified upstream regression. This
     # control specifically verifies restoration independently of test acceptance.
-    assert (r / 'helper.py').stat().st_mode & 0o111
+    assert sh(r, 'git', 'ls-files', '--stage', 'helper.py').startswith('100755')
+    if os.name != 'nt':
+        assert (r / 'helper.py').stat().st_mode & 0o111
     assert not sh(r, 'git', 'status', '--porcelain'), result.log
 
 

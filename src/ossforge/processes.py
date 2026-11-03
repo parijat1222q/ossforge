@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import os
 import signal
+import shutil
 import subprocess
 import sys
 import time
@@ -142,6 +143,8 @@ def launched(command, **kwargs):
     assigned = False
     try:
         if os.name == 'nt':
+            if not shutil.which(command[0]):
+                raise FileNotFoundError(2, 'native command executable not found', command[0])
             job = Job()
             info = subprocess.STARTUPINFO()
             info.lpAttributeList = {'handle_list': [job.handle, job.ready]}
