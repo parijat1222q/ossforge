@@ -605,3 +605,65 @@ even if the queue is corrupt; direct `queue` inspection refuses corrupt state
 without a traceback or resetting it.
 STOP is a command-entry guard, not a sandbox or a guarantee that an already
 running native subprocess is interrupted; preserve its state before resuming.
+
+## Opt-in offline native environment setup
+
+`environment-prepare ID RECIPE.json` prepares an unpublished clean queued item's
+native environment. This is explicit setup requested by an operator, not execution
+of instructions merely found in a repository. Read the actual development guide,
+package metadata, constraints and build requirements first. Confirm that the setup
+is within the owner's authority and needs no paid service, new login or legal
+statement. Stop and ask about unresolved requirements.
+
+The recipe has exactly these schema-1 fields:
+
+```json
+{
+  "schema": 1,
+  "note": "Read the development guide and package metadata; explain the setup and remaining limits",
+  "sources": [{"path": "CONTRIBUTING.md", "sha256": "actual file SHA-256"}],
+  "wheelhouse": "/absolute/path/to/reviewed-wheels",
+  "wheels": {"actual-package.whl": "actual wheel SHA-256"},
+  "commands": [
+    ["{python}", "-m", "pip", "--isolated", "install", "--no-index", "--find-links", "{wheelhouse}", "actual-reviewed-package"],
+    ["{python}", "-m", "pip", "--isolated", "install", "--no-index", "--no-build-isolation", "--no-deps", "-e", "{clone}"]
+  ]
+}
+```
+
+Use actual filenames, requirements and hashes, not the illustrative values above.
+Only `{python}`, `{environment}`, `{clone}` and `{wheelhouse}` placeholders are
+supported. Every command is argv beginning with `{python}`; there is no shell.
+The operator prepares the wheelhouse separately. It must contain only regular
+wheel files with an exact manifest. Downloading wheels is not permission to build
+or execute them on the host. Dynamic editable-build dependencies can be absent
+from static `build-system.requires`; identify them from the reviewed backend and
+its errors rather than assuming the metadata is complete. The tool does not
+resolve those dependencies automatically or download anything.
+
+Setup always requires working Linux Bubblewrap and `/usr/bin/python3` with venv
+support. It checks the current recorded policy and resolved publication route,
+clean source and wheel manifest before running. The namespace has no network,
+a private home, read-only source/system files/wheelhouse, and one new writable
+environment folder under the configured work directory. It never falls back to
+host setup. `--timeout SECONDS` bounds the whole setup worker to 1..1800 seconds
+(default 600); a timeout terminates its process group. Failed attempts retain logs
+and never save a success receipt. Unsupported builds needing source writes,
+services, extra system tools or online access stop here; do not weaken the boundary
+to claim success. The coding assistant itself remains outside this boundary.
+
+Success returns `receipt_file`, `python` and a local setup receipt, not bug proof.
+`environment-status ID RECEIPT.json` validates the base, cited setup files,
+wheelhouse and a content/mode digest of the prepared runtime. A later clean fix
+commit may proceed when the base and cited setup sources are unchanged. Runtime
+or setup changes require inspection and a new environment. Receipts are local
+stale-state guards, not signed attestations or a malicious-host defense.
+
+Use `agent-verify RESULT.json --environment-receipt RECEIPT.json` to validate the
+setup again and select offline Bubblewrap verification with that runtime mounted
+read-only. The result's test executable must be the receipt's absolute `python`;
+checks should use its installed tools and temporary output paths. The ordinary
+fail-before/pass-after, exact source, policy and separate publication gates remain.
+A setup receipt does not mark an item verified or authorize any public action.
+This optional path is not universal automatic project provisioning, an IDE-driver
+integration, assistant isolation or whole-workflow acceptance.

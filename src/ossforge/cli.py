@@ -6,9 +6,10 @@ import dataclasses
 import json
 import math
 import sys
+import subprocess
 from pathlib import Path
 
-from . import preparation, qualification, agent_next, duplicate_reviews, agent_run, evidence, driver, acceptance, identity, issue_reviews, policy_review
+from . import environment, preparation, qualification, agent_next, duplicate_reviews, agent_run, evidence, driver, acceptance, identity, issue_reviews, policy_review
 from . import audit as audit_mod
 from . import dedupe, research_session, repo_research, admission, discovery, comment, critique, digest, doctor, gh, hunt, loop, patrol, profile, radar, review, safety, scout, submit, vet, verify
 from .config import Config, load
@@ -119,7 +120,11 @@ def build_parser() -> argparse.ArgumentParser:
                     help="explicit research checkpoint while preserving a completed local-preparation review hold")
     at = add("agent-task", "print a model-neutral local task as JSON")
     at.add_argument("--item", default=None)
-    add("agent-verify", "validate external-driver result and rerun tests; never publish", "result_file")
+    ep = add("environment-prepare", "opt-in offline setup from a source-reviewed recipe", "id", "recipe_file")
+    ep.add_argument("--timeout", type=int, default=600)
+    add("environment-status", "inspect an unchanged prepared environment receipt", "id", "receipt_file")
+    av = add("agent-verify", "validate external-driver result and rerun tests; never publish", "result_file")
+    av.add_argument("--environment-receipt", default=None, help="validate prepared setup and use its runtime with offline bwrap verification")
     add("agent-run", "one bounded local external-driver contribution attempt", command={"required": True},
              timeout={"type": float, "default": 900}, daily_attempts={"type": int, "default": 2},
              skip_discovery={"action": "store_true"}, publish={"action": "store_true"})
@@ -177,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
     # Keep read-only inspection and explicit emergency resume available.
     mutating = a.cmd in {
         'bootstrap', 'research-repo', 'research-propose', 'research-review',
-        'preparation-commit', 'preparation-verify', 'prepare', 'commit', 'audit', 'hunt',
+        'environment-prepare', 'preparation-commit', 'preparation-verify', 'prepare', 'commit', 'audit', 'hunt',
         'agent-run', 'agent-verify', 'verify', 'hold', 'unhold', 'reject',
         'review-duplicate', 'review-commit-match', 'review-issue', 'reconsider-issue',
         'submit', 'post-critique', 'loop', 'digest', 'discover', 'scout', 'features', 'patrol'}
@@ -423,6 +428,16 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(f"SKIP {a.repo}: anti-AI policy in {r['anti_ai']}" if r["anti_ai"]
                   else f"{a.repo}: {r['clean']} clean (need verification), {r['duplicate']} duplicate")
+    elif a.cmd in {"environment-prepare", "environment-status"}:
+        try:
+            with repo_research.locked(cfg):
+                result = (environment.prepare(cfg, q, a.id, Path(a.recipe_file), a.timeout)
+                          if a.cmd == "environment-prepare" else environment.status(cfg, q, a.id, Path(a.receipt_file)))
+            emit(result)
+            return 0 if result["status"] == "environment_prepared" else 1
+        except (ValueError, OSError, subprocess.TimeoutExpired, evidence.StaleEvidence, gh.GhError, safety.Blocked) as exc:
+            print(f"REFUSED: {exc}", file=sys.stderr)
+            return 1
     elif a.cmd == "agent-run":
         try:
             result = agent_run.run(cfg, shlex.split(a.command), timeout=a.timeout, attempts=a.daily_attempts,
@@ -447,9 +462,16 @@ def main(argv: list[str] | None = None) -> int:
             return 1
     elif a.cmd == "agent-verify":
         try:
-            result = driver.complete(q, driver.parse(Path(a.result_file)),
-                                     isolation_mode=cfg.verification_isolation, readonly_paths=cfg.verification_readonly_paths)
-        except (driver.Invalid, OSError, evidence.StaleEvidence) as exc:
+            proposed = driver.parse(Path(a.result_file))
+            mode, mounts = cfg.verification_isolation, cfg.verification_readonly_paths
+            if a.environment_receipt is not None:
+                prepared = environment.status(cfg, q, proposed['id'], Path(a.environment_receipt))
+                runtime = Path(prepared['python']).parent.parent
+                if proposed.get('outcome') == 'hold' or proposed['test_command'][0] != prepared['python']:
+                    raise environment.Invalid('prepared verification needs the receipt interpreter as test argv executable')
+                mode, mounts = 'bwrap', [str(runtime)]
+            result = driver.complete(q, proposed, isolation_mode=mode, readonly_paths=mounts)
+        except (driver.Invalid, environment.Invalid, OSError, evidence.StaleEvidence) as exc:
             print(f"REFUSED: {exc}", file=sys.stderr)
             return 1
         emit(result)
