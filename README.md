@@ -109,6 +109,14 @@ pip install -e ".[dev]"
 `.[dev]` also installs `pytest` and `ruff`. ossforge uses `ruff` for extra bug detection and for linting during
 `verify`, so keep it installed.
 
+For an installed wheel, `ossforge guide` prints the packaged public workflow.
+`ossforge guide --output-dir ossforge-workspace` creates a **new** companion
+folder containing `AGENTS.md`, `docs/local-ai.md` and the example config. Open
+that folder in your coding assistant and read the guides before starting. Existing
+paths are refused, never overwritten. This exports guidance only: it does not
+configure identity, sign in, install a model, start a search or authorize publication.
+The clone/editable installation above already contains these files.
+
 ### 4. Configure (optional)
 
 ```bash
