@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import fcntl
+from contextlib import contextmanager
 import re
 import subprocess
 import uuid
@@ -208,7 +211,49 @@ def check_dependencies(clone: Path, manifest: dict) -> None:
             or setup.get('runtime_sha256') != manifest['runtime_sha256']
             or setup.get('system_inputs') != manifest['system_inputs'] or setup.get('recipe') != manifest['recipe']):
         raise Invalid('native replay result/setup dependency binding changed')
-    _compare(result['baseline'], result['fixed'], result['spec']['expected_failures'])
+    spec = result['spec']
+    # Revalidate semantics from the actual hashed files, not a second summary.
+    phase_records = []
+    for phase, revision in [('baseline', snapshot['base']), ('fixed', 'HEAD')]:
+        inputs = environment._read(folder / (phase + '-input.json'))
+        observed = environment._read(folder / (phase + '-observation.json'))
+        modules = {}
+        for name, rel in spec['modules'].items():
+            if revision == 'HEAD':
+                digest = environment._digest(clone / rel)
+            else:
+                blob = subprocess.run(['git', 'show', f'{revision}:{rel}'], cwd=clone, capture_output=True, check=True).stdout
+                digest = hashlib.sha256(blob).hexdigest()
+            modules[name] = {'path': str(clone / rel), 'sha256': digest}
+        rc = 1 if phase == 'baseline' else 0
+        if (not isinstance(inputs.get('nonce'), str) or not inputs['nonce']
+                or inputs.get('modules') != modules or observed.get('schema') != 1
+                or observed.get('nonce') != inputs['nonce'] or observed.get('modules') != modules
+                or observed.get('problems') != [] or observed.get('exit_code') != rc):
+            raise Invalid('native replay actual input/observation binding changed: ' + phase)
+        observed['process_exit'] = rc
+        if observed != result[phase]:
+            raise Invalid('native replay embedded observation differs from actual artifact: ' + phase)
+        phase_records.append(observed)
+    if environment._read(folder / 'baseline-input.json')['nonce'] == environment._read(folder / 'fixed-input.json')['nonce']:
+        raise Invalid('native replay phase nonces must differ')
+    _compare(*phase_records, spec['expected_failures'])
+
+
+@contextmanager
+def publication_locked(cfg: Config):
+    """Exclude replay source restoration from same-state publication effects."""
+    cfg.path('publication.lock').parent.mkdir(parents=True, exist_ok=True)
+    with cfg.path('publication.lock').open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise Invalid('another publication holds this state directory; preserve pending work') from exc
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
 
 
 def complete(cfg: Config, queue: Queue, proposal: dict, receipt_file: Path, spec_file: Path, timeout: int = 600) -> dict:

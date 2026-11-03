@@ -751,3 +751,16 @@ records and files is outside the guarantee. Other generic test-command routes
 retain their existing semantics; this is not a requirement that every possible
 runtime is prepared through this route, generic native-language support, proof
 that test assertions are useful, or actual IDE acceptance.
+
+The replay and native-completion CLI commands hold both the state-run lock and
+publication lock while source is temporarily restored. They reload queued work
+after locking. Submit uses that same publication lock; concurrent same-state
+publication is refused rather than racing a baseline checkout. This excludes
+cooperating CLI operations, not arbitrary external editors or other programs.
+
+Additional check commands are trusted operator-provided argv, not inspected for
+semantic usefulness. `python -c 'pass'` is not a useful project check. The native
+replay still independently requires the named baseline regression assertions
+and fixed passes, but the operator must select the repository's real required
+checks. Unknown explicit verification kinds refuse; older generic receipts
+without a kind retain their existing source-tree-only semantics.

@@ -433,7 +433,8 @@ def main(argv: list[str] | None = None) -> int:
                   else f"{a.repo}: {r['clean']} clean (need verification), {r['duplicate']} duplicate")
     elif a.cmd == 'environment-replay-pytest':
         try:
-            with repo_research.locked(cfg):
+            with repo_research.locked(cfg), native_replay.publication_locked(cfg):
+                q = Queue(cfg.path("queue.json"))
                 emit(native_replay.replay(cfg, q, a.id, Path(a.receipt_file), Path(a.spec_file), a.timeout))
             return 0
         except (ValueError, OSError, evidence.StaleEvidence, gh.GhError, safety.Blocked) as exc:
@@ -476,12 +477,13 @@ def main(argv: list[str] | None = None) -> int:
             if bool(a.environment_receipt) != bool(a.replay_spec):
                 raise native_replay.Invalid('native completion needs both environment receipt and replay spec')
             if a.environment_receipt:
-                with repo_research.locked(cfg):
+                with repo_research.locked(cfg), native_replay.publication_locked(cfg):
+                    q = Queue(cfg.path("queue.json"))
                     result = native_replay.complete(cfg, q, driver.parse(Path(a.result_file)), Path(a.environment_receipt), Path(a.replay_spec))
             else:
                 result = driver.complete(q, driver.parse(Path(a.result_file)),
                                          isolation_mode=cfg.verification_isolation, readonly_paths=cfg.verification_readonly_paths)
-        except (driver.Invalid, native_replay.Invalid, environment.Invalid, OSError, evidence.StaleEvidence) as exc:
+        except (driver.Invalid, native_replay.Invalid, environment.Invalid, repo_research.Invalid, OSError, evidence.StaleEvidence) as exc:
             print(f"REFUSED: {exc}", file=sys.stderr)
             return 1
         emit(result)
