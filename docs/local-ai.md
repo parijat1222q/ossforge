@@ -681,3 +681,46 @@ unresolved. This optional capability does not establish automatic project
 provisioning, an IDE-driver integration, assistant isolation or full acceptance.
 Receipts are unsigned local stale-state guards. Anyone with write access can alter
 both files and receipts; this is not a malicious-host defense or attestation.
+
+
+## Bounded Python pytest source replay (local only)
+
+`environment-replay-pytest ID RECEIPT.json SPEC.json` validates an unchanged
+prepared editable Python runtime against baseline and fixed checkout source.
+It never marks a queue item verified and cannot authorize `submit`.
+
+```json
+{
+  "schema": 1,
+  "modules": {"package.module": "package/module.py"},
+  "tests": ["tests/test_module.py"],
+  "expected_failures": ["tests/test_module.py::test_specific_regression"]
+}
+```
+
+Map every changed non-test source exactly once. This first route supports only
+existing modified regular Python files; added/deleted sources, configuration,
+build inputs, compiled modules and other languages need a different reviewed
+method. Tests are explicit checkout test-file/node selections, not arbitrary
+pytest options. Both phases use the same regression tests and must collect and
+execute the same nonempty node IDs without skips. Baseline must fail only the
+named call-phase assertions, not setup, teardown, import or collection errors;
+the fixed phase must pass every report.
+
+The observer runs inside the actual pytest process without pre-importing the
+target modules or injecting source search paths. It checks imported file origins
+and hashes during test reports. A site-packages copy, missing import or changed
+input refuses the replay. Source files are temporarily restored to the base
+revision for baseline and restored to committed HEAD in a finally block. Runtime,
+setup receipt, source snapshot and observer contents are checked again afterward.
+Each native phase has `--timeout` 1..1800 seconds (default600); the native process
+group is terminated on timeout. Runtime and source remain read-only to native
+processes; only a generated observation folder is writable, with no network and
+a private home. Logs are retained even on refusal.
+
+This is a local stale-input check, not malicious repository/host attestation or
+proof that a test asserts the right behavior. Python tests and plugins can alter
+Python state; semantic review still matters. Other repository-native checks and
+submission/runtime revalidation remain separate, unresolved handoff work. A
+`python_replay_passed` result is deliberately not an `agent-verify` receipt.
+There is no generic language, installed-copy rebuild, IDE or full-workflow claim.

@@ -9,7 +9,7 @@ import sys
 import subprocess
 from pathlib import Path
 
-from . import environment, preparation, qualification, agent_next, duplicate_reviews, agent_run, evidence, driver, acceptance, identity, issue_reviews, policy_review
+from . import native_replay, environment, preparation, qualification, agent_next, duplicate_reviews, agent_run, evidence, driver, acceptance, identity, issue_reviews, policy_review
 from . import audit as audit_mod
 from . import dedupe, research_session, repo_research, admission, discovery, comment, critique, digest, doctor, gh, hunt, loop, patrol, profile, radar, review, safety, scout, submit, vet, verify
 from .config import Config, load
@@ -123,6 +123,8 @@ def build_parser() -> argparse.ArgumentParser:
     ep = add("environment-prepare", "opt-in offline setup from a source-reviewed recipe", "id", "recipe_file")
     ep.add_argument("--timeout", type=int, default=600)
     add("environment-status", "inspect an unchanged prepared environment receipt", "id", "receipt_file")
+    nr = add("environment-replay-pytest", "bounded Python pytest replay; never promote or publish", "id", "receipt_file", "spec_file")
+    nr.add_argument("--timeout", type=int, default=600)
     add("agent-verify", "validate external-driver result and rerun tests; never publish", "result_file")
     add("agent-run", "one bounded local external-driver contribution attempt", command={"required": True},
              timeout={"type": float, "default": 900}, daily_attempts={"type": int, "default": 2},
@@ -181,7 +183,7 @@ def main(argv: list[str] | None = None) -> int:
     # Keep read-only inspection and explicit emergency resume available.
     mutating = a.cmd in {
         'bootstrap', 'research-repo', 'research-propose', 'research-review',
-        'environment-prepare', 'preparation-commit', 'preparation-verify', 'prepare', 'commit', 'audit', 'hunt',
+        'environment-prepare', 'environment-replay-pytest', 'preparation-commit', 'preparation-verify', 'prepare', 'commit', 'audit', 'hunt',
         'agent-run', 'agent-verify', 'verify', 'hold', 'unhold', 'reject',
         'review-duplicate', 'review-commit-match', 'review-issue', 'reconsider-issue',
         'submit', 'post-critique', 'loop', 'digest', 'discover', 'scout', 'features', 'patrol'}
@@ -427,6 +429,14 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(f"SKIP {a.repo}: anti-AI policy in {r['anti_ai']}" if r["anti_ai"]
                   else f"{a.repo}: {r['clean']} clean (need verification), {r['duplicate']} duplicate")
+    elif a.cmd == 'environment-replay-pytest':
+        try:
+            with repo_research.locked(cfg):
+                emit(native_replay.replay(cfg, q, a.id, Path(a.receipt_file), Path(a.spec_file), a.timeout))
+            return 0
+        except (ValueError, OSError, evidence.StaleEvidence, gh.GhError, safety.Blocked) as exc:
+            print(f"REFUSED: {exc}", file=sys.stderr)
+            return 1
     elif a.cmd in {"environment-prepare", "environment-status"}:
         try:
             with repo_research.locked(cfg):
