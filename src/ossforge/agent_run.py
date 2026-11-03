@@ -127,7 +127,7 @@ def _run(cfg, command, timeout, attempts, execute, discover, journal):
             return checked
     item = q.items[item_id]
     if job['status'] == 'resume_verified':
-        evidence.check(Path(item.clone), submit._item_base(item), item.branch, item.verification, **({'contribution_base': item.contribution_base} if item.contribution_base else {}))
+        evidence.check(Path(item.clone), submit._item_base(item), item.branch, item.verification, cfg=cfg, **({'contribution_base': item.contribution_base} if item.contribution_base else {}))
     if not execute:
         journal.note('verified patch retained; publication not enabled')
         return {'status': 'verified_not_submitted', 'id': item_id}
