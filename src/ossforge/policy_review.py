@@ -57,7 +57,7 @@ def _load(cfg: Config) -> dict:
 
 
 def record(cfg: Config, repo: str, snap: dict, note: str, prohibited: bool = False,
-           publication_route: str | None = None, local_preparation: str = "unresolved", contribution_branch: str | None = None) -> dict:
+           publication_route: str | None = None, local_preparation: str = "unresolved", contribution_branch: str | None = None, external_regression_doc: str | None = None) -> dict:
     if contribution_branch is not None:
         contribution_base.branch(contribution_branch)
         if snap.get("ref") != contribution_branch or not note.strip():
@@ -83,6 +83,11 @@ def record(cfg: Config, repo: str, snap: dict, note: str, prohibited: bool = Fal
     rec["local_preparation"] = local_preparation
     if publication_route is not None:
         rec["publication_route"] = publication_route
+    if external_regression_doc is not None:
+        matches = [d for d in snap['docs'] if d['path'] == external_regression_doc]
+        if not matches or not note.strip() or prohibited:
+            raise ValueError('external regression review needs a current cited policy document and reason')
+        rec['external_regression'] = {'path': external_regression_doc, 'sha': matches[0]['sha'], 'reason': note}
     allr = _load(cfg)
     allr[repo.lower()] = rec
     _file(cfg).parent.mkdir(parents=True, exist_ok=True)

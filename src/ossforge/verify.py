@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import shutil
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -73,15 +75,16 @@ class VerifyResult:
     test_files: list[str] = field(default_factory=list)
     log: list[str] = field(default_factory=list)
     evidence: dict = field(default_factory=dict)
+    external_test: bool = False
 
     @property
     def ok(self) -> bool:
-        return self.failed_without_fix and self.passed_with_fix and self.lint_ok and bool(self.fix_files) and bool(self.test_files)
+        return self.failed_without_fix and self.passed_with_fix and self.lint_ok and bool(self.fix_files) and (bool(self.test_files) or self.external_test)
 
 
 def verify_fix(clone: Path, base: str, py: Path, test_args: list[str], timeout: int = 600,
                *, test_command: list[str] | None = None, check_commands: list[list[str]] | None = None,
-               failure_code: int = 1, isolation_mode: str = "none", readonly_paths: list[str] | None = None, contribution_base: dict | None = None) -> VerifyResult:
+               failure_code: int = 1, isolation_mode: str = "none", readonly_paths: list[str] | None = None, contribution_base: dict | None = None, external: dict | None = None, cfg=None) -> VerifyResult:
     """The branch at HEAD holds fix + test. Revert only the non-test files to base, expect failure,
     restore, expect success, then lint the touched files."""
     r = VerifyResult()
@@ -96,7 +99,15 @@ def verify_fix(clone: Path, base: str, py: Path, test_args: list[str], timeout: 
     files = changed_files(clone, base)
     r.test_files = [f for f in files if predictor.is_test_path(f)]
     r.fix_files = [f for f in files if not predictor.is_test_path(f)]
-    if not r.fix_files or not r.test_files:
+    if external is not None:
+        if isolation_mode != 'none':
+            r.log.append('external regression artifact/cache mounts unavailable in requested isolation; no fallback')
+            return r
+        if cfg is None or r.test_files or failure_code != 1 or test_command != external.get('command'):
+            r.log.append("external mode needs policy context and a source-only patch")
+            return r
+        r.external_test = True
+    if not r.fix_files or not (r.test_files or r.external_test):
         r.log.append("branch must change both a source file and a test file")
         return r
     pytest = test_command if test_command is not None else [str(py), "-m", "pytest", "-q", "-x", *test_args]
@@ -107,6 +118,34 @@ def verify_fix(clone: Path, base: str, py: Path, test_args: list[str], timeout: 
             wrapped = isolation.wrap(command, clone, isolation_mode, [] if readonly_paths is None else readonly_paths)
         except (isolation.Unavailable, OSError) as exc:
             return 127, str(exc)
+        if external is not None:
+            from . import external_regression
+            external_regression.check(cfg, clone, external)
+            env = scrubbed_env({'PYTHONPATH': str(clone.resolve()), 'PYTHONNOUSERSITE': '1'})
+            import hashlib
+            import json
+            expected = {p: hashlib.sha256((clone / p).read_bytes()).hexdigest() for p in r.fix_files}
+            cache = tempfile.mkdtemp(prefix='ossforge-external-pycache-')
+            env['PYTHONPYCACHEPREFIX'] = cache
+            cleanup_confirmed = True
+            try:
+                result = _run(wrapped, clone, seconds, env=env)
+            except processes.CleanupUnconfirmed:
+                cleanup_confirmed = False
+                raise
+            finally:
+                if cleanup_confirmed:
+                    shutil.rmtree(cache)
+
+            if any(hashlib.sha256((clone / p).read_bytes()).hexdigest() != h for p, h in expected.items()):
+                raise ValueError('external regression changed checkout source')
+            if command == pytest:
+                markers = [line for line in result[1].splitlines() if line.startswith('OSSFORGE_EXTERNAL_IMPORTS=')]
+                if len(markers) != 1 or json.loads(markers[0].split('=', 1)[1]) != expected:
+                    return 86, 'external regression checkout import observation missing or wrong'
+
+            external_regression.check(cfg, clone, external)
+            return result
         return _run(wrapped, clone, seconds)
     try:
         isolation.wrap(pytest, clone, isolation_mode, [] if readonly_paths is None else readonly_paths)
@@ -170,7 +209,12 @@ def verify_fix(clone: Path, base: str, py: Path, test_args: list[str], timeout: 
 
     if r.ok:
         try:
+            if external is not None:
+                from . import external_regression
+                external_regression.check(cfg, clone, external)
             r.evidence = evidence.capture(clone, base, [pytest, *checks], **({"contribution_base": contribution_base} if contribution_base else {}))
+            if external is not None:
+                r.evidence.update(verification_kind='python_external_regression', external_regression=external)
             r.evidence['verification_isolation'] = isolation_mode
             r.evidence['readonly_paths'] = list([] if readonly_paths is None else readonly_paths)
             if any(initial[k] != r.evidence[k] for k in ("base", "tree", "branch")):
