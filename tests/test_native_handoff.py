@@ -293,3 +293,38 @@ def test_native_completion_excludes_existing_publication(setup, tmp_path, capsys
         assert cli.main(['--config',str(config),'agent-verify','unused.json','--environment-receipt','unused.json','--replay-spec','unused.json']) == 1
     assert 'another publication holds' in capsys.readouterr().err
     assert q.items['i'].status == 'clean'
+
+
+def test_actual_direct_submit_cli_respects_native_replay_publication_lock(setup, tmp_path, monkeypatch, capsys):  # noqa: F811
+    from ossforge import cli, submit
+    cfg,q,source,recipe,data = setup
+    q.set('i', status='verified')
+    q.save()
+    config = tmp_path/'cfg.yaml'
+    config.write_text(f'state_dir: {cfg.state_dir}\nwork_dir: {cfg.work_dir}\nkill_file: {cfg.kill_file}\n')
+    effects = []
+    monkeypatch.setattr(submit,'_submit',lambda *a:effects.append('public effect'))
+    # Exercise real CLI dispatch and real submit.submit lock, not a stand-in.
+    with native_replay.publication_locked(cfg):
+        assert cli.main(['--config',str(config),'submit','i','--yes']) == 1
+    assert 'another publication holds' in capsys.readouterr().out
+    assert effects == []
+
+
+def test_actual_submit_wrapper_excludes_native_completion(setup, tmp_path, monkeypatch, capsys):  # noqa: F811
+    from ossforge import cli, submit
+    from ossforge.limiter import DailyLimiter
+    from ossforge.safety import Audit
+    cfg,q,source,recipe,data = setup
+    q.set('i',status='verified')
+    q.save()
+    config = tmp_path/'cfg.yaml'
+    config.write_text(f'state_dir: {cfg.state_dir}\nwork_dir: {cfg.work_dir}\nkill_file: {cfg.kill_file}\n')
+    def publication(*a):
+        # This callback executes only after the actual submit wrapper acquired
+        # its lock. Native completion must refuse before parsing/running tests.
+        assert cli.main(['--config',str(config),'agent-verify','unused.json','--environment-receipt','unused.json','--replay-spec','unused.json']) == 1
+        assert 'another publication holds' in capsys.readouterr().err
+        return {'held_fixture': True}
+    monkeypatch.setattr(submit,'_submit',publication)
+    assert submit.submit(q.items['i'],DailyLimiter(cfg.path('daily.json'),2),cfg,Audit(cfg.path('audit.jsonl')),execute=True) == {'held_fixture':True}
