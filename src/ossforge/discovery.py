@@ -18,6 +18,24 @@ from .outcomes import Stats
 _REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
 
 
+# Description/topic evidence only changes order within one bounded search page.
+# A language label can come from helper scripts in a documentation collection.
+# Keep unknown/custom layouts and every collection available for later review.
+_RESOURCE_DESCRIPTION = re.compile(
+    r"\b(?:curated|collective|definitive)\s+(?:list|collection)\b"
+    r"|\b(?:freely available|free)\s+programming books\b"
+    r"|\b(?:list|collection) of (?:free |public |learning |programming )*(?:apis|books|resources|tutorials)\b"
+    r"|\b(?:prep(?:are)? for|preparation for) (?:the )?.{0,30}interview\b", re.I)
+
+
+def _resource_collection_hint(repository: dict) -> bool:
+    """Weak metadata hint, not a suitability verdict or exclusion rule."""
+    description = repository.get('description')
+    topics = repository.get('topics')
+    return (isinstance(description, str) and bool(_RESOURCE_DESCRIPTION.search(description))
+            or isinstance(topics, list) and 'awesome-list' in topics)
+
+
 @dataclass
 class Plan:
     strategy: str
@@ -45,7 +63,13 @@ def discover_broad_repos(cfg: Config, language: str | None = None, cursor: int =
         raise
     except (gh.GhError, OSError):
         return []
-    names = [r["full_name"] for r in repos if isinstance(r, dict) and _REPO.fullmatch(r.get("full_name", ""))]
+    candidates = [r for r in repos if isinstance(r, dict)
+                  and isinstance(r.get("full_name"), str) and _REPO.fullmatch(r["full_name"])]
+    if cfg.repo_first:
+        # Stable partition BEFORE slicing the five-repository window. Preserve
+        # star order within both groups and retain all thirty page entries.
+        candidates.sort(key=_resource_collection_hint)
+    names = [r["full_name"] for r in candidates]
     if not names:
         return []
     window_size = 5
