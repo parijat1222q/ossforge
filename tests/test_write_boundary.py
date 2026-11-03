@@ -337,11 +337,11 @@ def test_completed_pr_resume_does_not_create_another_pr_at_cap(world):
 
 
 def test_direct_submit_same_state_lock_refuses_before_writes(world):
-    import fcntl
+    from ossforge import locking
     path = world['cfg'].path('publication.lock')
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open('a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        locking.acquire(lock)
         with pytest.raises(submit.Refused, match='another publication'):
             run(world, execute=True)
     assert writes(world['log']) == []

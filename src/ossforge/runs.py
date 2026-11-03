@@ -1,7 +1,7 @@
 """Local run journal. Recovery means explicit interrupted status, not replayed writes."""
 from __future__ import annotations
 
-import fcntl
+from . import locking
 import json
 import re
 import time
@@ -26,7 +26,7 @@ class Run:
         self.root.mkdir(parents=True, exist_ok=True)
         self.lock = (self.root / 'run.lock').open('a')
         try:
-            fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            locking.acquire(self.lock)
         except BlockingIOError as exc:
             self.lock.close()
             raise Busy('another run holds this state directory') from exc
@@ -34,7 +34,7 @@ class Run:
             if self.before_journal:
                 self.before_journal()
         except BaseException:
-            fcntl.flock(self.lock, fcntl.LOCK_UN)
+            locking.release(self.lock)
             self.lock.close()
             raise
         try:
@@ -71,6 +71,6 @@ class Run:
             (self.root / 'runs').mkdir(exist_ok=True)
             self._write(self.root / 'runs' / f'{self.data["id"]}.json', self.data)
         finally:
-            fcntl.flock(self.lock, fcntl.LOCK_UN)
+            locking.release(self.lock)
             self.lock.close()
         return False

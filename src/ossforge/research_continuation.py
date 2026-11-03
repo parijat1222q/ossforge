@@ -16,7 +16,7 @@ import subprocess
 import uuid
 from pathlib import Path
 
-from . import (gh, repo_access, repo_suitability, evidence, identity, preparation, repo_research as research,
+from . import (durability, gh, repo_access, repo_suitability, evidence, identity, preparation, repo_research as research,
                research_session, safety, policy_review)
 from .config import Config
 from .queue import Queue
@@ -468,11 +468,7 @@ def _another(cfg: Config, token: str) -> dict:
                 out.write(json.dumps(owner))
                 out.flush()
                 os.fsync(out.fileno())
-            fd = os.open(marker.parent, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                os.fsync(fd)
-            finally:
-                os.close(fd)
+            durability.sync_directory(marker.parent)
     else:
         if not marker.is_file() or _marker_read(marker) != owner:
             raise Invalid('pending checkout lacks matching ownership marker; preserve it')

@@ -3,14 +3,12 @@ from __future__ import annotations
 
 import json
 import math
-import os
-import signal
 import subprocess
 import time
 from datetime import date
 from pathlib import Path
 
-from . import contribution_base as cb, policy_review, preparation, identity, driver, loop, runs, safety, submit, verify, evidence
+from . import processes, contribution_base as cb, policy_review, preparation, identity, driver, loop, runs, safety, submit, verify, evidence
 from .config import Config
 from .limiter import DailyLimiter
 from .queue import Queue
@@ -20,12 +18,12 @@ def invoke(command: list[str], cwd: Path, task_file: Path, result_file: Path, ti
     """No shell; kill the driver's process group on timeout. This is not isolation."""
     env = verify.scrubbed_env({'OSSFORGE_TASK_FILE': str(task_file.resolve()),
                                'OSSFORGE_RESULT_FILE': str(result_file.resolve())})
-    with subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.DEVNULL,
-                          stderr=subprocess.DEVNULL, start_new_session=True) as proc:
+    with processes.launched(command, cwd=cwd, env=env, stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL) as (proc, job):
         try:
             return proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
+            processes.kill_tree(proc, job)
             proc.wait()
             raise
 
