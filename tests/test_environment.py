@@ -58,7 +58,7 @@ def available(source):
         try:
             p = subprocess.run(environment.isolation.wrap(['/usr/bin/python3', '-c', environment.PROBE], source, 'bwrap', []), capture_output=True, timeout=30)
             if p.returncode:
-                reason = 'system venv probe failed: ' + (p.stdout + p.stderr).decode()[-1200:]
+                reason = 'system venv probe failed: ' + (p.stdout + p.stderr).decode()
         except (OSError, subprocess.TimeoutExpired) as exc:
             reason = str(exc)
     if reason:
