@@ -157,7 +157,9 @@ def next_step(cfg: Config, queue: Queue, config_path: str, scope: str = 'default
                 if session['status'] != 'search_session_active':
                     return result(session['status'], session=session, preserved_preparation=preserved_preparation,
                                   next_argv=prefix + ['research-session'],
-                                  warning='choose an explicit search budget; resume never extends it, exhausted search is not proof of no opportunity')
+                                  selected_repository=lead['repo'] if lead else None,
+                                  investigation_started=False,
+                                  warning='selection, refresh and initial begin require remaining search allowance; only already-started investigations with a preserved checkout continue after expiry. Preserve this selected lead; do not silently renew. Exhausted search is not proof of no opportunity')
             checkpoint = repo_research.checkpoint(cfg, prefix)
             checkpoint['continue_argv'] = continuation
             if preserved_preparation:

@@ -81,7 +81,7 @@ def status(cfg: Config) -> dict:
     remaining = max(0., data['deadline'] - now)
     return {**data, 'status': 'search_budget_exhausted' if not remaining else 'search_session_active',
             'remaining_seconds': remaining,
-            'scope': 'repository search only; existing source investigation and native verification are separate'}
+            'scope': 'repository search includes selection, refresh and initial begin; only already-started investigations with a preserved checkout and native verification are separate'}
 
 
 def allowance(cfg: Config) -> float:
