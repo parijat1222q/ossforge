@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
-import fcntl
+from . import locking
 import fnmatch
 import hashlib
 import json
@@ -136,11 +136,11 @@ def _shared_lock():
         return
     d.mkdir(parents=True, exist_ok=True)
     with (d / "ratelimit.lock").open("a+") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX)
+        locking.acquire(fh, blocking=True)
         try:
             yield d
         finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
+            locking.release(fh)
 
 
 def _load_gates(d: Path | None) -> dict:

@@ -5,6 +5,7 @@ network access happens inside this boundary. The caller still trusts host git.
 """
 from __future__ import annotations
 
+import sys
 import shutil
 from pathlib import Path
 
@@ -18,6 +19,8 @@ def wrap(command: list[str], clone: Path, mode: str, readonly_paths: list[str]) 
         raise Unavailable('verification_isolation must be none or bwrap')
     if mode == 'none':
         return command
+    if sys.platform != 'linux':
+        raise Unavailable('Bubblewrap isolation and offline environment replay require Linux; no host fallback')
     binary = shutil.which('bwrap')
     if not binary:
         raise Unavailable('requested verification isolation unavailable: bubblewrap is not installed')

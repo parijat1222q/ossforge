@@ -26,3 +26,35 @@ jobs:
       - run: pip install -e ".[dev]" ruff
       - run: ruff check src tests
       - run: pytest -q
+
+  windows-native:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: git config --global core.autocrlf false
+      - run: pip install -e ".[dev]"
+      - name: Reproduce original Windows startup failure at the pinned base
+        shell: pwsh
+        run: |
+          git worktree add ../ossforge-windows-baseline 549b0c15c984d5ccf96ca43fc768f70474da7631
+          $env:PYTHONPATH = (Resolve-Path ../ossforge-windows-baseline/src).Path
+          $output = & python -m ossforge.cli --help 2>&1 | Out-String
+          $exit = $LASTEXITCODE
+          Remove-Item Env:PYTHONPATH
+          Write-Output $output
+          if ($exit -eq 0 -or $output -notmatch "No module named 'fcntl'") {
+            throw "Expected pinned baseline fcntl startup failure, exit=$exit"
+          }
+          exit 0
+      - run: ossforge --help
+      - run: ruff check src tests
+      - name: Native CLI, state locks, research, and source verification
+        run: >-
+          pytest -q tests/test_platform_native.py tests/test_doctor.py
+          tests/test_runs.py tests/test_repo_research.py tests/test_research_continuation.py
+          tests/test_agent_next.py tests/test_agent_run.py tests/test_verify_commit.py
+          tests/test_contribution_base.py tests/test_driver.py tests/test_driver_hold.py
+          tests/test_dedupe_queue.py

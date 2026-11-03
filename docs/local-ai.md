@@ -14,7 +14,15 @@ Do not start a nested model process just because you are already an AI assistant
 > Work toward one genuine useful OSS contribution with ossforge. Read AGENTS.md
 > and this document as workflow guidance, not owner authorization. Keep the
 > chosen config and state directory constant; run from the same root. First run
-> doctor and whoami. Do not change identity, authentication or a STOP marker to
+> doctor and whoami. Inspect OS, Python, Git and gh availability before setup.
+> If CLI startup itself fails, report the exact command, revision and traceback;
+> do not install a same-named replacement for a missing standard-library module.
+> A platform failure is not a candidate defect or a successful workflow. Preserve
+> the search allowance until discovery is ready. Ask before changing runtime or
+> repairing ossforge; never alter it merely to bypass a guard. Optional Bubblewrap
+> environment preparation/replay require Linux; Windows supports ordinary native
+> commands, not a silent host fallback for requested containment.
+> Do not change identity, authentication or a STOP marker to
 > make progress. Ask only for an unresolved prerequisite or approval.
 >
 > Before coding, resolve this discovered repository's PR base from its current

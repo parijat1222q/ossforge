@@ -8,13 +8,12 @@ a private home and read-only checkout plus explicitly prepared runtime mounts.
 from __future__ import annotations
 
 import os
-import signal
 import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import evidence, predictor, isolation
+from . import processes, evidence, predictor, isolation
 
 SAFE_ENV_KEYS = ("PATH", "SYSTEMROOT", "TEMP", "TMP", "HOME", "USERPROFILE", "LANG", "PYTHONIOENCODING")
 
@@ -27,18 +26,15 @@ def scrubbed_env(extra: dict[str, str] | None = None) -> dict[str, str]:
 
 def _run(cmd: list[str], cwd: Path, timeout: int = 600, env: dict | None = None) -> tuple[int, str]:
     try:
-        with subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        with processes.launched(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                               text=True, encoding="utf-8", errors="replace",
-                              env=env or scrubbed_env(), start_new_session=True) as proc:
+                              env=env or scrubbed_env()) as (proc, job):
             try:
                 out, err = proc.communicate(timeout=timeout)
             except subprocess.TimeoutExpired:
                 # A test runner can spawn workers. Kill the entire timed-out group
                 # before restoring source files or running the patched test.
-                try:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                processes.kill_tree(proc, job)
                 proc.communicate()
                 return 124, f"timeout after {timeout}s; test process group terminated"
             return proc.returncode, (out + err)[-4000:]
@@ -132,6 +128,7 @@ def verify_fix(clone: Path, base: str, py: Path, test_args: list[str], timeout: 
     if test_command is None and failure_code != 1:
         r.log.append("pytest baseline must fail with exit 1, not a collection/tool error")
         return r
+    cleanup_confirmed = True
     try:
         if in_base:
             rc0, out0 = _run(["git", "checkout", base, "--", *in_base], clone)
@@ -145,9 +142,14 @@ def verify_fix(clone: Path, base: str, py: Path, test_args: list[str], timeout: 
             rc, out = run_native(pytest, timeout)
             r.failed_without_fix = rc == failure_code
             r.log.append(f"without fix rc={rc}: {out[-300:]}")
+    except processes.CleanupUnconfirmed:
+        cleanup_confirmed = False
+        raise
     finally:
         # Git restores tracked content and metadata, including executable bits,
         # symlinks, additions and deletions. Byte copies lose that metadata.
+        if not cleanup_confirmed:
+            raise processes.CleanupUnconfirmed("native workers may be alive; source left at baseline, inspect before restoration")
         rc_restore, out_restore = _run(["git", "restore", "--source=HEAD", "--staged", "--worktree", "--", *r.fix_files], clone)
         if rc_restore:
             r.failed_without_fix = False

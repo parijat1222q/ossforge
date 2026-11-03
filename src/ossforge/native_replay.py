@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import hashlib
-import fcntl
+from . import locking
 from contextlib import contextmanager
 import re
 import subprocess
@@ -250,13 +250,13 @@ def publication_locked(cfg: Config):
     cfg.path('publication.lock').parent.mkdir(parents=True, exist_ok=True)
     with cfg.path('publication.lock').open('a') as lock:
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            locking.acquire(lock)
         except BlockingIOError as exc:
             raise Invalid('another publication holds this state directory; preserve pending work') from exc
         try:
             yield
         finally:
-            fcntl.flock(lock, fcntl.LOCK_UN)
+            locking.release(lock)
 
 
 

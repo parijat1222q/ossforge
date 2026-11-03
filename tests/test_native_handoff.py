@@ -282,14 +282,14 @@ def test_unknown_verification_kind_refuses_while_legacy_remains_supported(bound_
 
 
 def test_native_completion_excludes_existing_publication(setup, tmp_path, capsys):  # noqa: F811
-    import fcntl
+    from ossforge import locking
     from ossforge import cli
     cfg,q,source,recipe,data = setup
     config = tmp_path/'cfg.yaml'
     config.write_text(f'state_dir: {cfg.state_dir}\nwork_dir: {cfg.work_dir}\nkill_file: {cfg.kill_file}\n')
     cfg.path('publication.lock').parent.mkdir(parents=True,exist_ok=True)
     with cfg.path('publication.lock').open('a') as lock:
-        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        locking.acquire(lock)
         assert cli.main(['--config',str(config),'agent-verify','unused.json','--environment-receipt','unused.json','--replay-spec','unused.json']) == 1
     assert 'another publication holds' in capsys.readouterr().err
     assert q.items['i'].status == 'clean'

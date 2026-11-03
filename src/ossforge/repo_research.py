@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import uuid
 import hashlib
-import fcntl
+from . import locking, durability
 import os
 from contextlib import contextmanager
 from dataclasses import asdict
@@ -36,13 +36,13 @@ def locked(cfg: Config):
     cfg.path('run.lock').parent.mkdir(parents=True, exist_ok=True)
     with cfg.path('run.lock').open('a') as lock:
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            locking.acquire(lock)
         except BlockingIOError as exc:
             raise Invalid('another run holds this state directory; preserve pending work') from exc
         try:
             yield
         finally:
-            fcntl.flock(lock, fcntl.LOCK_UN)
+            locking.release(lock)
 
 
 def load(cfg: Config) -> dict:
@@ -87,12 +87,7 @@ def _save(cfg: Config, data: dict) -> None:
         out.write(json.dumps(data, indent=2))
         out.flush()
         os.fsync(out.fileno())
-    tmp.replace(path)
-    fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+    durability.replace(tmp, path)
 
 
 def _selection_scope(cfg: Config) -> str:

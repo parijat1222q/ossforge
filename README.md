@@ -59,6 +59,24 @@ bug/perf candidates and drafts a respectful comment for you to approve.
 
 ## Setup guide
 
+### Platform support
+
+The ordinary CLI, local state locks, repository research and host-native source
+verification support Windows and Linux with Python 3.10+. Keep state on a local
+filesystem, not a network share. Windows uses exclusive byte-range locks; Linux
+uses flock. Do not install a third-party package named `fcntl` to fix startup.
+
+Optional Bubblewrap isolation, offline environment preparation and prepared Python
+replay require Linux. Requesting them on Windows stops without a host fallback.
+Ordinary host verification is not containment. Native process-tree cleanup uses
+POSIX process groups or Windows Job Objects; if a Windows job cannot be created
+or joined, the target command is not started.
+
+Research state files are flushed before replacement. Linux also flushes their
+parent directory. Windows uses write-through replacement, but does not promise
+POSIX directory-fsync or parent/ancestor namespace durability after power loss.
+After an interrupted or uncertain write, preserve and reconcile the existing state.
+
 ### 1. Prerequisites
 
 | Tool | Why | Check |

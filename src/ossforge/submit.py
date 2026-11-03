@@ -8,7 +8,7 @@ step so a failure (e.g. issue created, PR failed) resumes instead of duplicating
 from __future__ import annotations
 
 import subprocess
-import fcntl
+from . import locking
 from collections.abc import Callable
 from pathlib import Path
 
@@ -342,7 +342,7 @@ def submit(it: Item, limiter: DailyLimiter, cfg: Config, audit: safety.Audit, ex
     cfg.path("publication.lock").parent.mkdir(parents=True, exist_ok=True)
     with cfg.path("publication.lock").open("a") as lock:
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            locking.acquire(lock)
         except BlockingIOError as exc:
             raise Refused("another publication holds this state directory; retry after it finishes") from exc
         try:
@@ -369,7 +369,7 @@ def submit(it: Item, limiter: DailyLimiter, cfg: Config, audit: safety.Audit, ex
                     save(progress)
             return _submit(it, limiter, cfg, audit, execute, persist)
         finally:
-            fcntl.flock(lock, fcntl.LOCK_UN)
+            locking.release(lock)
 
 
 def _submit(it: Item, limiter: DailyLimiter, cfg: Config, audit: safety.Audit, execute: bool = False,
