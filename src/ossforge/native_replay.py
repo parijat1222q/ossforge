@@ -243,6 +243,8 @@ def check_dependencies(clone: Path, manifest: dict) -> None:
 @contextmanager
 def publication_locked(cfg: Config):
     """Exclude replay source restoration from same-state publication effects."""
+    if any(p.is_symlink() for p in (cfg.path('publication.lock'), *cfg.path('publication.lock').parents)):
+        raise Invalid('symlink publication lock path; preserve it')
     cfg.path('publication.lock').parent.mkdir(parents=True, exist_ok=True)
     with cfg.path('publication.lock').open('a') as lock:
         try:
@@ -259,6 +261,8 @@ def publication_locked(cfg: Config):
 def complete(cfg: Config, queue: Queue, proposal: dict, receipt_file: Path, spec_file: Path, timeout: int = 600) -> dict:
     """Run replay now, then normal checks and promote only bound current evidence."""
     from . import driver, submit
+    if 'commit_message' in proposal or 'commit_paths' in proposal:
+        raise Invalid('parent commit request is agent-run only, not native completion')
     item, clone = environment._item(queue, proposal['id'])
     if proposal.get('outcome') == 'hold':
         raise Invalid('native replay completion requires a fix proposal, not hold')

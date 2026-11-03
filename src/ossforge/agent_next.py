@@ -10,7 +10,7 @@ import math
 import time
 from pathlib import Path
 
-from . import identity, preparation, research_session, repo_research, qualification, driver, evidence, submit
+from . import research_continuation, identity, preparation, research_session, repo_research, qualification, driver, evidence, submit
 from .config import Config
 from .queue import Queue
 
@@ -27,6 +27,11 @@ def next_step(cfg: Config, queue: Queue, config_path: str, scope: str = 'default
                 "publication": "requires owner authorization; never inferred from this checkpoint", **kw}
     if Path(cfg.kill_file).exists():
         return result("stopped", reason="kill switch is set; do not resume without the owner's instruction")
+    try:
+        if research_continuation.pending(cfg):
+            return repo_research.checkpoint(cfg, prefix) | {'continue_argv': continuation}
+    except (ValueError, OSError) as exc:
+        return result('inspect_local', reason=str(exc))
     # A partial remote effect takes priority over new work. Do not blindly retry.
     for item in queue.items.values():
         progress = item.submitted

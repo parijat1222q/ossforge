@@ -32,7 +32,8 @@ def task(queue: Queue, item_id: str | None = None) -> dict:
             'path': item.path, 'line': item.line, 'notes': item.notes, 'source_issue': item.source_issue,
             'requirements': ['candidate is not proof of a bug', 'read repository contribution policy',
                              'check issues, pull requests and recent commits for duplicates',
-                             'commit a regression test and minimal source fix on a new local branch',
+                             'write a regression test and minimal source fix on a new local branch',
+                             'inside agent-run return optional commit_message for parent-owned identity-checked commit; no nested state-mutating CLI',
                              'run repository-native checks; do not sign legal agreements or merge upstream'],
             'result_schema': {'schema': 1, 'id': item.id, 'base': base, 'branch': 'local-branch',
                               'test_command': ['test-executable', 'regression-test'],
@@ -62,8 +63,17 @@ def parse(path: Path) -> dict:
             if not isinstance(data[key], str) or not data[key].strip() or '\x00' in data[key]:
                 raise Invalid(f'{key} must be nonempty text without NUL')
         return data
-    if not isinstance(data, dict) or set(data) != KEYS or type(data['schema']) is not int or data['schema'] != 1:
+    if not isinstance(data, dict) or set(data) not in (KEYS, KEYS | {'commit_message', 'commit_paths'}) or type(data['schema']) is not int or data['schema'] != 1:
         raise Invalid('result must match exact schema 1 keys')
+    if 'commit_message' in data and (not isinstance(data['commit_message'], str) or not data['commit_message'].strip() or len(data['commit_message']) > 4000 or '\x00' in data['commit_message']):
+        raise Invalid('commit_message must be bounded nonempty text without NUL')
+    if 'commit_message' in data:
+        paths = data['commit_paths']
+        if (not isinstance(paths, list) or not 1 <= len(paths) <= 30 or any(
+                not isinstance(p, str) or not p or '\x00' in p or p.startswith(('/', ':', '-'))
+                or any(part in {'', '.', '..'} for part in p.split('/'))
+                or any(c in p for c in '*?[') for p in paths) or len(set(paths)) != len(paths)):
+            raise Invalid('commit_paths must list distinct exact repository files')
     for key in ('id', 'base', 'branch', 'issue_title', 'issue_body', 'pr_title', 'pr_body'):
         if not isinstance(data[key], str) or not data[key].strip() or '\x00' in data[key]:
             raise Invalid(f'{key} must be nonempty text without NUL')
@@ -80,6 +90,8 @@ def parse(path: Path) -> dict:
 
 
 def complete(queue: Queue, result: dict, *, isolation_mode: str = "none", readonly_paths: list[str] | None = None) -> dict:
+    if 'commit_message' in result:
+        raise Invalid('commit_message is agent-run only; standalone completion requires an already committed patch')
     item = queue.items.get(result['id'])
     if not item or item.status != 'clean' or not item.clone:
         raise Invalid('result must target an existing clean cloned candidate')

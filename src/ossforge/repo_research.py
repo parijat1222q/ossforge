@@ -10,6 +10,7 @@ import json
 import uuid
 import hashlib
 import fcntl
+import os
 from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -30,6 +31,8 @@ class Invalid(ValueError):
 @contextmanager
 def locked(cfg: Config):
     """Share the existing state-run exclusion without rewriting its journal."""
+    if any(p.is_symlink() for p in (cfg.path('run.lock'), *cfg.path('run.lock').parents)):
+        raise Invalid('symlink state lock path; preserve it')
     cfg.path('run.lock').parent.mkdir(parents=True, exist_ok=True)
     with cfg.path('run.lock').open('a') as lock:
         try:
@@ -43,6 +46,8 @@ def locked(cfg: Config):
 
 
 def load(cfg: Config) -> dict:
+    if any(p.is_symlink() for p in (cfg.path('repo_research.json'), *cfg.path('repo_research.json').parents)):
+        raise Invalid('symlink research state path; preserve it')
     try:
         data = json.loads(cfg.path('repo_research.json').read_text())
     except FileNotFoundError:
@@ -51,12 +56,13 @@ def load(cfg: Config) -> dict:
         raise Invalid('repo research state unreadable; preserve it before retry') from exc
     if (not isinstance(data, dict) or data.get('schema') != 1
             or type(data.get('cursor')) is not int or data['cursor'] < 0
+            or 'lead' not in data
             or (data.get('lead') is not None and not isinstance(data['lead'], dict))):
         raise Invalid('repo research state invalid; preserve it before retry')
     lead = data['lead']
     if lead is not None and (not isinstance(lead.get('repo'), str)
                              or not discovery._REPO.fullmatch(lead.get('repo', ''))
-                             or lead.get('status') not in {'collecting', 'repo_review_needed', 'investigating'}):
+                             or lead.get('status') not in ('collecting', 'repo_review_needed', 'investigating')):
         raise Invalid('repo research lead invalid; preserve it before retry')
     if lead and lead['status'] == 'investigating' and any(not lead.get(k) for k in
             ('clone', 'base', 'checkout', 'revision', 'revision_url', 'default_branch')):
@@ -66,10 +72,22 @@ def load(cfg: Config) -> dict:
 
 def _save(cfg: Config, data: dict) -> None:
     path = cfg.path('repo_research.json')
+    if any(p.is_symlink() for p in (path, *path.parents)):
+        raise Invalid('symlink research state path; preserve it')
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix('.tmp')
-    tmp.write_text(json.dumps(data, indent=2))
+    import tempfile
+    fd, name = tempfile.mkstemp(prefix=path.name + '.', dir=path.parent)
+    tmp = Path(name)
+    with os.fdopen(fd, 'w') as out:
+        out.write(json.dumps(data, indent=2))
+        out.flush()
+        os.fsync(out.fileno())
     tmp.replace(path)
+    fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def _selection_scope(cfg: Config) -> str:
@@ -130,8 +148,16 @@ def refresh(cfg: Config) -> dict:
     lead = data['lead']
     if not lead:
         raise Invalid('no selected repository; run research-repo first')
+    result = collect_selected(cfg, lead, research_session.allowance(cfg) if cfg.repo_first else cfg.discovery_read_budget_seconds)
+    data['lead'] = result
+    _save(cfg, data)
+    return result
+
+
+def collect_selected(cfg: Config, lead: dict, seconds: float) -> dict:
+    """Collect only this already selected source, without changing search state."""
     repo = lead['repo']
-    with gh.read_budget(research_session.allowance(cfg) if cfg.repo_first else cfg.discovery_read_budget_seconds):
+    with gh.read_budget(seconds):
         restriction = repo_access.pr_restriction(repo)
         health = radar.analyze(repo)
         outside = acceptance.evidence(repo)
@@ -166,8 +192,6 @@ def refresh(cfg: Config) -> dict:
                                'search issues, all-state PRs and recent commits before a patch',
                                'issue age alone never clears claims, assignment or policy',
                                'no code handoff or publication approval is created here']}
-    data['lead'] = result
-    _save(cfg, data)
     return result
 
 
@@ -389,7 +413,7 @@ def propose(cfg: Config, path: str, line: int, detail: str, source_issue: int = 
             hits[sha] = {'url': url, 'snapshot': duplicate_reviews.commit_snapshot(lead['repo'], sha)}
     # Pre-coding review is separate from verified publication duplicate reviews.
     # Every retry repeats live search, policy, tip and clean-checkout checks above.
-    context = {'repo': lead['repo'], 'base': lead['base'], 'checkout': current,
+    context = {'repo': lead['repo'], 'research_id': lead.get('research_id', ''), 'base': lead['base'], 'checkout': current,
                'path': path, 'line': line, 'detail': detail, 'source_issue': source_issue}
     fingerprint = hashlib.sha256(json.dumps(context, sort_keys=True).encode()).hexdigest()
     prior = issue_reviews.load(cfg.path('research_source_review.json'))
@@ -449,7 +473,7 @@ def review_source(cfg: Config, source: str, reason: str) -> dict:
     context = pending.get('context', {})
     if hashlib.sha256(json.dumps(context, sort_keys=True).encode()).hexdigest() != pending.get('fingerprint'):
         raise Invalid('saved hypothesis fingerprint changed; repeat research-propose')
-    if not lead or lead['status'] != 'investigating' or context.get('repo') != lead['repo']:
+    if not lead or lead['status'] != 'investigating' or (context.get('repo') != lead['repo'] or context.get('research_id', '') != lead.get('research_id', '')):
         raise Invalid('no matching active investigation source review')
     if not isinstance(reason, str) or not reason.strip() or len(reason) > 4000:
         raise Invalid('provide a bounded source-specific unrelated-work reason')
@@ -483,6 +507,14 @@ def review_source(cfg: Config, source: str, reason: str) -> dict:
 
 def checkpoint(cfg: Config, prefix: list[str]) -> dict:
     data = load(cfg)
+    from . import research_continuation
+    pending = research_continuation.pending(cfg)
+    if pending:
+        return {'schema': 1, 'status': 'research_continuation_pending', 'local_only': True,
+                'repo': pending['old_lead']['repo'], 'phase': pending['phase'],
+                'old_lead_authoritative': True, 'destination': pending['destination'],
+                'next_argv': prefix + ['research-repo', '--another-investigation', pending['token']],
+                'warning': 'preserve old source and partial destination; exact token retry only, no search renewal'}
     if not data['lead'] and data.get('exhausted', {}).get('scope') == _selection_scope(cfg):
         return {'schema': 1, 'local_only': True, **data['exhausted'],
                 'next_argv': prefix + ['research-repo', '--next-window']}
@@ -497,7 +529,8 @@ def checkpoint(cfg: Config, prefix: list[str]) -> dict:
     if data['lead'] and data['lead']['status'] == 'investigating':
         context = review.get('context', {})
         if context.get('repo') == data['lead']['repo']:
-            valid = hashlib.sha256(json.dumps(context, sort_keys=True).encode()).hexdigest() == review.get('fingerprint')
+            valid = (context.get('research_id', '') == data['lead'].get('research_id', '') and
+                     hashlib.sha256(json.dumps(context, sort_keys=True).encode()).hexdigest() == review.get('fingerprint'))
             try:
                 current = evidence.capture(Path(data['lead']['clone']), data['lead']['base'], [])
             except evidence.StaleEvidence:

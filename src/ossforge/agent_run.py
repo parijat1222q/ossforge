@@ -10,7 +10,7 @@ import time
 from datetime import date
 from pathlib import Path
 
-from . import driver, loop, runs, safety, submit, verify, evidence
+from . import policy_review, preparation, identity, driver, loop, runs, safety, submit, verify, evidence
 from .config import Config
 from .limiter import DailyLimiter
 from .queue import Queue
@@ -37,13 +37,15 @@ def run(cfg: Config, command: list[str], *, timeout: float = 900, attempts: int 
     if not math.isfinite(timeout) or not 1 <= timeout <= 3600 or type(attempts) is not int or not 1 <= attempts <= 20:
         raise driver.Invalid('driver timeout must be 1..3600 seconds and daily attempts 1..20')
     try:
-        with runs.Run(Path(cfg.state_dir), progress) as journal:
+        with runs.Run(Path(cfg.state_dir), progress, before_journal=lambda: _pending_guard(cfg)) as journal:
             return _run(cfg, command, timeout, attempts, execute, discover, journal)
     except runs.Busy as exc:
         return {'status': 'busy', 'reason': str(exc)}
 
 
 def _run(cfg, command, timeout, attempts, execute, discover, journal):
+    from . import research_continuation
+    research_continuation.guard(cfg)
     safety.kill_switch(cfg)
     # Publication is a separate explicit CLI choice, never inherited from loop config.
     from dataclasses import replace
@@ -88,6 +90,8 @@ def _run(cfg, command, timeout, attempts, execute, discover, journal):
         folder = cfg.path('driver-jobs') / journal.data['id']
         folder.mkdir(parents=True)
         task_file, result_file = folder / 'task.json', folder / 'result.json'
+        job['assigned_head'] = evidence._git(Path(job['clone']), 'rev-parse', 'HEAD')
+        job['assigned_checkout'] = evidence.capture(Path(job['clone']), job['base'], [])
         task_file.write_text(json.dumps(job, indent=2), encoding='utf-8')
         journal.note(f'driver: starting {item_id}; timeout {timeout}s')
         started = time.monotonic()
@@ -110,6 +114,10 @@ def _run(cfg, command, timeout, attempts, execute, discover, journal):
             raise driver.Invalid('hold result does not match assigned snapshot')
         if result['id'] != item_id or result['base'] != job['base']:
             raise driver.Invalid('driver result does not match assigned item/base')
+        if result.get('commit_message'):
+            _commit_result(cfg, q, job, result, journal)
+            result = {k: v for k, v in result.items() if k not in {'commit_message', 'commit_paths'}}
+        safety.kill_switch(cfg)
         checked = driver.complete(q, result, isolation_mode=cfg.verification_isolation,
                                   readonly_paths=cfg.verification_readonly_paths)
         journal.note(f'verification: {checked["status"]}')
@@ -136,3 +144,55 @@ def _run(cfg, command, timeout, attempts, execute, discover, journal):
     q.save()
     journal.note(f'submitted: {result["pr"]}')
     return {'status': 'submitted', 'id': item_id, 'result': result}
+
+
+def _commit_result(cfg, queue, job, result, journal):
+    """Parent-only commit, after child exit, under the runner's run.lock."""
+    safety.kill_switch(cfg)
+    current = Queue(cfg.path('queue.json'))
+    item = current.items.get(job['id'])
+    assigned = queue.items.get(job['id'])
+    from dataclasses import asdict
+    if not item or not assigned or asdict(item) != asdict(assigned) or item.status != 'clean' or item.submitted:
+        raise driver.Invalid('assigned queue changed before commit; preserve patch')
+    clone = Path(job['clone'])
+    if (clone.is_symlink() or any(p.is_symlink() for p in clone.parents)
+            or Path(evidence._git(clone, 'rev-parse', '--show-toplevel')).resolve() != clone
+            or Path(item.clone).resolve() != clone):
+        raise driver.Invalid('assigned Git root changed before commit')
+    preparation.public_guard(clone)
+    if (submit._base(str(clone)) != job['base'] or result['base'] != job['base']
+            or evidence._git(clone, 'symbolic-ref', '--short', 'HEAD') != result['branch']
+            or result['branch'] == evidence._git(clone, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD').removeprefix('origin/')
+            or evidence._git(clone, 'rev-parse', 'HEAD') != job['assigned_head']
+            or evidence._git(clone, 'rev-parse', 'HEAD^{tree}') != job['assigned_checkout']['tree']):
+        raise driver.Invalid('assigned HEAD/base/tree or result branch changed before commit')
+    identity.require(identity.check_upstream(str(clone), item.repo))
+    why = policy_review.check(cfg, item.repo)
+    if why:
+        raise driver.Invalid(why)
+    if policy_review.publication_route(cfg, item.repo) not in {'issue_pr', 'pr_only'}:
+        raise driver.Invalid('coding prerequisites unresolved before commit')
+    paths = result['commit_paths']
+    # Explicit regular source paths only. No automatic whole-tree staging.
+    for rel in paths:
+        p = clone / rel
+        if not p.is_file() or p.is_symlink() or not p.resolve().is_relative_to(clone):
+            raise driver.Invalid('commit path is not an existing regular source file')
+    changed = set(evidence._git(clone, 'diff', '--name-only', 'HEAD').splitlines())
+    changed.update(evidence._git(clone, 'ls-files', '--others', '--exclude-standard').splitlines())
+    if not changed or changed != set(paths):
+        raise driver.Invalid('commit paths must exactly match intended changed/untracked files; no empty or unrelated commit')
+    import fnmatch
+    if any(any(fnmatch.fnmatch(p, pat) for pat in identity.ARTIFACTS) for p in paths):
+        raise driver.Invalid('generated artifact cannot be committed by runner')
+    safety.kill_switch(cfg)
+    commit = identity.commit(cfg, str(clone), result['commit_message'], paths)
+    journal.data['driver_commit'] = {'id': item.id, 'head': commit, 'base': job['base'],
+                                      'branch': result['branch'], 'paths': paths}
+    journal.note('parent identity-checked commit completed; verification still pending')
+
+
+def _pending_guard(cfg):
+    from . import research_continuation
+    research_continuation.guard(cfg)

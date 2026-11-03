@@ -9,7 +9,7 @@ import sys
 import subprocess
 from pathlib import Path
 
-from . import native_replay, environment, preparation, qualification, agent_next, duplicate_reviews, agent_run, evidence, driver, acceptance, identity, issue_reviews, policy_review
+from . import research_continuation, native_replay, environment, preparation, qualification, agent_next, duplicate_reviews, agent_run, evidence, driver, acceptance, identity, issue_reviews, policy_review
 from . import audit as audit_mod
 from . import dedupe, research_session, repo_research, admission, discovery, comment, critique, digest, doctor, gh, hunt, loop, patrol, profile, radar, review, safety, scout, submit, vet, verify
 from .config import Config, load
@@ -54,6 +54,10 @@ def build_parser() -> argparse.ArgumentParser:
     rs.add_argument("--new", action="store_true", help="explicitly replace an exhausted session, preserving history")
     rr = add("research-repo", "select and collect a durable repo-first research lead without issue search")
     rr.add_argument("--refresh", action="store_true")
+    rr.add_argument("--abandon-investigation", default="", metavar="TOKEN")
+    rr.add_argument("--reconcile-run", action="store_true")
+    rr.add_argument("--reason", default="")
+    rr.add_argument("--another-investigation", metavar="TOKEN", default="", help="continue the same selected source in a separate pinned checkout; no search renewal")
     rr.add_argument("--begin", action="store_true")
     rr.add_argument("--review-native-source", default=None, metavar="PATH")
     rr.add_argument("--native-note", default="")
@@ -164,13 +168,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    a = build_parser().parse_args(argv)
-    explicit_config = a.config is not None
+    return _main(argv)
+
+
+def _main(argv: list[str] | None = None, *, _state_locked: bool = False, _request=None) -> int:
+    a = _request[0] if _request else build_parser().parse_args(argv)
+    explicit_config = _request[2] if _request else a.config is not None
     a.config = a.config if explicit_config else "ossforge.yaml"
     if explicit_config and not Path(a.config).is_file():
         print(f"REFUSED: explicit config file unavailable: {a.config}; no default workflow state opened", file=sys.stderr)
         return 2
-    cfg = load(a.config)
+    cfg = _request[1] if _request else load(a.config)
     # Emergency controls must not depend on readable workflow state.
     if a.cmd == "stop":
         Path(cfg.kill_file).parent.mkdir(parents=True, exist_ok=True)
@@ -194,8 +202,11 @@ def main(argv: list[str] | None = None) -> int:
     mutating = mutating or (a.cmd == 'review-qualification' and bool(a.defer))
     if mutating:
         try:
+            if not (a.cmd == "research-repo" and (a.another_investigation or a.abandon_investigation)):
+                if research_continuation.pending(cfg):
+                    raise repo_research.Invalid("source continuation pending; only exact token retry or emergency controls may mutate")
             safety.kill_switch(cfg)
-        except safety.Blocked as exc:
+        except (safety.Blocked, repo_research.Invalid, OSError, ValueError) as exc:
             print(f"REFUSED: {exc}", file=sys.stderr)
             return 1
     if a.cmd == 'agent-next' and Path(cfg.kill_file).exists():
@@ -207,6 +218,22 @@ def main(argv: list[str] | None = None) -> int:
                           'publication': 'requires owner authorization; never inferred from this checkpoint',
                           'reason': 'kill switch is set; preserve state and wait for the owner'}))
         return 0
+    # These direct writers previously loaded state without the run exclusion.
+    # Re-enter only after acquiring it so every context read sees current state.
+    # Other writer families already own this lock (or runs.Run) internally.
+    direct_writers = {'bootstrap', 'policy-review', 'review-duplicate', 'review-commit-match',
+                      'prepare', 'commit', 'review-qualification', 'review-issue',
+                      'reconsider-issue', 'audit', 'hunt', 'verify', 'hold', 'unhold',
+                      'reject', 'submit', 'post-critique', 'digest', 'discover', 'scout',
+                      'features', 'patrol'}
+    direct = a.cmd in direct_writers or (a.cmd == 'agent-verify' and not a.environment_receipt)
+    if direct and mutating and not _state_locked:
+        try:
+            with repo_research.locked(cfg):
+                return _main(argv, _state_locked=True, _request=(a, cfg, explicit_config))
+        except (repo_research.Invalid, OSError) as exc:
+            print(f"REFUSED: {exc}", file=sys.stderr)
+            return 1
     try:
         q, audit, stats, limiter = _ctx(cfg)
     except (ValueError, OSError) as exc:
@@ -222,6 +249,8 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd in {"research-repo", "research-propose", "research-session", "research-review"}:
         try:
             with repo_research.locked(cfg):
+                if not (a.cmd == "research-repo" and (a.another_investigation or a.abandon_investigation)):
+                    research_continuation.guard(cfg)
                 if a.cmd == "research-session":
                     if a.seconds is not None:
                         safety.kill_switch(cfg)
@@ -233,24 +262,35 @@ def main(argv: list[str] | None = None) -> int:
                 elif a.cmd == "research-propose":
                     result = repo_research.propose(cfg, a.path, int(a.line), a.detail, a.source_issue)
                 else:
-                    if sum(bool(v) for v in (a.defer, a.refresh, a.begin, a.next_window, a.review_native_source is not None)) > 1:
+                    if sum(bool(v) for v in (a.defer, a.refresh, a.begin, a.next_window, a.review_native_source is not None, a.another_investigation, a.abandon_investigation, a.reconcile_run)) > 1:
                         raise repo_research.Invalid('choose only one research-repo action')
                     if a.review_native_source is not None and not a.review_native_source.strip():
                         raise repo_research.Invalid("--review-native-source cannot be empty")
                     if (a.native_guide or a.native_test_command or a.native_note) and a.review_native_source is None:
                         raise repo_research.Invalid("native guide/command requires --review-native-source")
+                    if bool(a.reason) != bool(a.abandon_investigation or a.reconcile_run):
+                        raise repo_research.Invalid('reason is required only for abandon or reconcile-run')
+                    if a.another_investigation or a.abandon_investigation or a.reconcile_run:
+                        with native_replay.publication_locked(cfg):
+                            result = (research_continuation.another(cfg, a.another_investigation) if a.another_investigation else
+                                      research_continuation.abandon(cfg, a.abandon_investigation, a.reason) if a.abandon_investigation else
+                                      research_continuation.reconcile_run(cfg, a.reason))
+                        emit(result)
+                        return 0
                     result = (repo_research.review_native(cfg, a.review_native_source, a.native_guide, a.native_test_command, a.native_note) if a.review_native_source is not None else
                               repo_research.next_window(cfg) if a.next_window else
                               repo_research.defer(cfg, a.defer) if a.defer else
                               repo_research.begin(cfg) if a.begin else
                               repo_research.refresh(cfg) if a.refresh else repo_research.prepare(cfg))
-        except (ValueError, research_session.Invalid, repo_research.Invalid, dedupe.Incomplete, gh.ReadBudgetExceeded, gh.GhError, safety.Blocked) as exc:
+        except (ValueError, OSError, research_session.Invalid, repo_research.Invalid, dedupe.Incomplete, gh.ReadBudgetExceeded, gh.GhError, safety.Blocked) as exc:
             print(f"REFUSED: {exc}", file=sys.stderr)
             return 1
         emit(result)
     elif a.cmd in {"preparation-task", "preparation-commit", "preparation-verify"}:
         try:
             with repo_research.locked(cfg):
+                if a.cmd != 'preparation-task':
+                    research_continuation.guard(cfg)
                 if a.cmd != 'preparation-task':
                     safety.kill_switch(cfg)
                 result = (preparation.task(cfg) if a.cmd == "preparation-task" else
@@ -434,6 +474,7 @@ def main(argv: list[str] | None = None) -> int:
     elif a.cmd == 'environment-replay-pytest':
         try:
             with repo_research.locked(cfg), native_replay.publication_locked(cfg):
+                research_continuation.guard(cfg)
                 q = Queue(cfg.path("queue.json"))
                 emit(native_replay.replay(cfg, q, a.id, Path(a.receipt_file), Path(a.spec_file), a.timeout))
             return 0
@@ -443,6 +484,8 @@ def main(argv: list[str] | None = None) -> int:
     elif a.cmd in {"environment-prepare", "environment-status"}:
         try:
             with repo_research.locked(cfg):
+                research_continuation.guard(cfg)
+                q = Queue(cfg.path("queue.json"))
                 result = (environment.prepare(cfg, q, a.id, Path(a.recipe_file), a.timeout)
                           if a.cmd == "environment-prepare" else environment.status(cfg, q, a.id, Path(a.receipt_file)))
             emit(result)
@@ -455,7 +498,7 @@ def main(argv: list[str] | None = None) -> int:
             result = agent_run.run(cfg, shlex.split(a.command), timeout=a.timeout, attempts=a.daily_attempts,
                                    execute=a.publish, discover=not a.skip_discovery,
                                    progress=lambda text: print(text, file=sys.stderr, flush=True))
-        except (driver.Invalid, OSError, evidence.StaleEvidence, safety.Blocked) as exc:
+        except (driver.Invalid, identity.IdentityError, OSError, evidence.StaleEvidence, safety.Blocked, gh.GhError, ValueError) as exc:
             print(f"REFUSED: {exc}", file=sys.stderr)
             return 1
         emit(result)
@@ -478,6 +521,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise native_replay.Invalid('native completion needs both environment receipt and replay spec')
             if a.environment_receipt:
                 with repo_research.locked(cfg), native_replay.publication_locked(cfg):
+                    research_continuation.guard(cfg)
                     q = Queue(cfg.path("queue.json"))
                     result = native_replay.complete(cfg, q, driver.parse(Path(a.result_file)), Path(a.environment_receipt), Path(a.replay_spec))
             else:
@@ -607,14 +651,18 @@ def main(argv: list[str] | None = None) -> int:
     elif a.cmd == "digest":
         print(digest.render(q, audit, patrol.patrol(audit, stats)))
     elif a.cmd == "loop":
-        if a.prepare_only:
-            # One bounded issue-to-task pass; never inherit executable hooks/effects.
-            loop.run_once(dataclasses.replace(cfg, auto_submit=False, patch_command=""),
-                          progress=lambda text: print(text, flush=True))
-        elif a.once:
-            loop.run_once(cfg, progress=lambda text: print(text, flush=True))
-        else:
-            loop.run_forever(cfg, int(a.interval_hours * 3600))
+        try:
+            if a.prepare_only:
+                # One bounded issue-to-task pass; never inherit executable hooks/effects.
+                loop.run_once(dataclasses.replace(cfg, auto_submit=False, patch_command=""),
+                              progress=lambda text: print(text, flush=True))
+            elif a.once:
+                loop.run_once(cfg, progress=lambda text: print(text, flush=True))
+            else:
+                loop.run_forever(cfg, int(a.interval_hours * 3600))
+        except (repo_research.Invalid, OSError, ValueError, safety.Blocked) as exc:
+            print(f"REFUSED: {exc}", file=sys.stderr)
+            return 1
     return 0
 
 
