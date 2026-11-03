@@ -135,3 +135,23 @@ def test_named_template_listing_failure_is_not_no_policy(monkeypatch):
     monkeypatch.setattr(gh, 'api', api)
     with pytest.raises(gh.GhError):
         vet.policy_texts('local/fixture', fresh=True)
+
+
+def test_extensionless_template_file_payload_is_discovered_without_listing_error(monkeypatch):
+    import base64
+    from ossforge import gh, policy_review
+    file_path = '.github/PULL_REQUEST_TEMPLATE'
+    def api(endpoint, **kw):
+        if endpoint.endswith('/contents/' + file_path):
+            return {
+                'path': file_path,
+                'type': 'file',
+                'encoding': 'base64',
+                'content': base64.b64encode(b'Please read contribution guidelines before submitting.').decode(),
+                'sha': 'joplin-template-sha',
+                'html_url': 'https://github.com/local/fixture',
+            }
+        return []
+    monkeypatch.setattr(gh, 'api', api)
+    snap = policy_review.snapshot('local/fixture')
+    assert any(doc['path'] == file_path and doc['sha'] == 'joplin-template-sha' for doc in snap['docs'])

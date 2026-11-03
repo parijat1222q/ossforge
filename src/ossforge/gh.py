@@ -336,6 +336,9 @@ def existing_files(repo: str, paths: tuple[str, ...], *, fresh: bool = False, st
             if strict and (exc.status != 404 or not d):
                 raise
             continue
+        if d and isinstance(listing, dict) and listing.get("type") == "file" and "path" in listing:
+            present.add(listing["path"])
+            continue
         if strict and (not isinstance(listing, list) or len(listing) >= 1000 or any(not isinstance(x, dict) or "path" not in x for x in listing)):
             raise GhError("policy directory listing unavailable")
         if isinstance(listing, list):

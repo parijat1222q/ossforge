@@ -82,7 +82,7 @@ def blocking(findings: list[Finding]) -> list[str]:
     return [f.msg for f in findings if f.level == "error"]
 
 
-PR_TEMPLATE_PATHS = (".github/PULL_REQUEST_TEMPLATE.md", ".github/pull_request_template.md", "PULL_REQUEST_TEMPLATE.md")
+PR_TEMPLATE_PATHS = (".github/PULL_REQUEST_TEMPLATE.md", ".github/pull_request_template.md", "PULL_REQUEST_TEMPLATE.md", ".github/PULL_REQUEST_TEMPLATE", "PULL_REQUEST_TEMPLATE")
 
 
 def review_branch(repo: str, clone: str, base: str, pr_body: str, run, gh_mod) -> list[Finding]:

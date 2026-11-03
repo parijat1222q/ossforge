@@ -68,6 +68,17 @@ def test_strict_policy_listing_rejects_malformed_or_saturated_result(monkeypatch
             gh.existing_files('owner/repo', ('README.md',), fresh=True, strict=True)
 
 
+def test_existing_files_handles_file_payload_for_template_parent(monkeypatch):
+    from ossforge import gh, policy
+    def api(path, **kw):
+        if path.endswith('/contents/.github/PULL_REQUEST_TEMPLATE'):
+            return {'path': '.github/PULL_REQUEST_TEMPLATE', 'type': 'file'}
+        return []
+    monkeypatch.setattr(gh, 'api', api)
+    res = gh.existing_files('owner/repo', policy.POLICY_FILES, fresh=True, strict=True)
+    assert '.github/PULL_REQUEST_TEMPLATE' in res
+
+
 def test_existing_fork_fix_and_work_claims_are_not_unclaimed():
     for body in ["I have a fix ready for this on my fork", "I'd like to work on improving this",
                  "I have a working fix on my fork", "I’d like to work on this", "I've a patch ready"]:
