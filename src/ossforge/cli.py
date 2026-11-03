@@ -6,9 +6,10 @@ import dataclasses
 import json
 import math
 import sys
+import subprocess
 from pathlib import Path
 
-from . import preparation, qualification, agent_next, duplicate_reviews, agent_run, evidence, driver, acceptance, identity, issue_reviews, policy_review
+from . import environment, preparation, qualification, agent_next, duplicate_reviews, agent_run, evidence, driver, acceptance, identity, issue_reviews, policy_review
 from . import audit as audit_mod
 from . import dedupe, research_session, repo_research, admission, discovery, comment, critique, digest, doctor, gh, hunt, loop, patrol, profile, radar, review, safety, scout, submit, vet, verify
 from .config import Config, load
@@ -119,6 +120,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="explicit research checkpoint while preserving a completed local-preparation review hold")
     at = add("agent-task", "print a model-neutral local task as JSON")
     at.add_argument("--item", default=None)
+    ep = add("environment-prepare", "opt-in offline setup from a source-reviewed recipe", "id", "recipe_file")
+    ep.add_argument("--timeout", type=int, default=600)
+    add("environment-status", "inspect an unchanged prepared environment receipt", "id", "receipt_file")
     add("agent-verify", "validate external-driver result and rerun tests; never publish", "result_file")
     add("agent-run", "one bounded local external-driver contribution attempt", command={"required": True},
              timeout={"type": float, "default": 900}, daily_attempts={"type": int, "default": 2},
@@ -177,7 +181,7 @@ def main(argv: list[str] | None = None) -> int:
     # Keep read-only inspection and explicit emergency resume available.
     mutating = a.cmd in {
         'bootstrap', 'research-repo', 'research-propose', 'research-review',
-        'preparation-commit', 'preparation-verify', 'prepare', 'commit', 'audit', 'hunt',
+        'environment-prepare', 'preparation-commit', 'preparation-verify', 'prepare', 'commit', 'audit', 'hunt',
         'agent-run', 'agent-verify', 'verify', 'hold', 'unhold', 'reject',
         'review-duplicate', 'review-commit-match', 'review-issue', 'reconsider-issue',
         'submit', 'post-critique', 'loop', 'digest', 'discover', 'scout', 'features', 'patrol'}
@@ -423,6 +427,16 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(f"SKIP {a.repo}: anti-AI policy in {r['anti_ai']}" if r["anti_ai"]
                   else f"{a.repo}: {r['clean']} clean (need verification), {r['duplicate']} duplicate")
+    elif a.cmd in {"environment-prepare", "environment-status"}:
+        try:
+            with repo_research.locked(cfg):
+                result = (environment.prepare(cfg, q, a.id, Path(a.recipe_file), a.timeout)
+                          if a.cmd == "environment-prepare" else environment.status(cfg, q, a.id, Path(a.receipt_file)))
+            emit(result)
+            return 0 if result["status"] == "environment_prepared" else 1
+        except (ValueError, OSError, subprocess.TimeoutExpired, evidence.StaleEvidence, gh.GhError, safety.Blocked) as exc:
+            print(f"REFUSED: {exc}", file=sys.stderr)
+            return 1
     elif a.cmd == "agent-run":
         try:
             result = agent_run.run(cfg, shlex.split(a.command), timeout=a.timeout, attempts=a.daily_attempts,
@@ -449,7 +463,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             result = driver.complete(q, driver.parse(Path(a.result_file)),
                                      isolation_mode=cfg.verification_isolation, readonly_paths=cfg.verification_readonly_paths)
-        except (driver.Invalid, OSError, evidence.StaleEvidence) as exc:
+        except (driver.Invalid, environment.Invalid, OSError, evidence.StaleEvidence) as exc:
             print(f"REFUSED: {exc}", file=sys.stderr)
             return 1
         emit(result)

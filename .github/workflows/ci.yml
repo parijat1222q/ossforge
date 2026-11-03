@@ -3,11 +3,26 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      OSSFORGE_REQUIRE_NATIVE_SETUP: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install native setup test prerequisites
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap python3-venv
+      - name: Diagnose system pip CA input
+        run: |
+          /usr/bin/python3 - <<'PYTHON'
+          import glob, os, sys
+          wheels = glob.glob('/usr/share/python-wheels/pip-*.whl')
+          assert len(wheels) == 1, wheels
+          sys.path.insert(0, wheels[0])
+          from pip._vendor import certifi
+          path = certifi.where()
+          print('system pip CA:', path, 'realpath:', os.path.realpath(path), 'exists:', os.path.isfile(path))
+          PYTHON
       - run: pip install -e ".[dev]" ruff
       - run: ruff check src tests
       - run: pytest -q

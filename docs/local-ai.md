@@ -605,3 +605,79 @@ even if the queue is corrupt; direct `queue` inspection refuses corrupt state
 without a traceback or resetting it.
 STOP is a command-entry guard, not a sandbox or a guarantee that an already
 running native subprocess is interrupted; preserve its state before resuming.
+
+## Opt-in offline native environment setup
+
+`environment-prepare ID RECIPE.json` prepares an unpublished clean queued item's
+native environment. This is explicit setup requested by an operator, not execution
+of instructions merely found in a repository. Read the actual development guide,
+package metadata, constraints and build requirements first. Confirm that the setup
+is within the owner's authority and needs no paid service, new login or legal
+statement. Stop and ask about unresolved requirements.
+
+The recipe has exactly these schema-1 fields:
+
+```json
+{
+  "schema": 1,
+  "note": "Read the development guide and package metadata; explain the setup and remaining limits",
+  "sources": [{"path": "CONTRIBUTING.md", "sha256": "actual file SHA-256"}],
+  "wheelhouse": "/absolute/path/to/reviewed-wheels",
+  "wheels": {"actual-package.whl": "actual wheel SHA-256"},
+  "commands": [
+    ["{python}", "-m", "pip", "--isolated", "install", "--no-index", "--find-links", "{wheelhouse}", "actual-reviewed-package"],
+    ["{python}", "-m", "pip", "--isolated", "install", "--no-index", "--no-build-isolation", "--no-deps", "-e", "{clone}"]
+  ]
+}
+```
+
+Use actual filenames, requirements and hashes, not the illustrative values above.
+Only `{python}`, `{environment}`, `{clone}` and `{wheelhouse}` placeholders are
+supported. Every command is argv beginning with `{python}`; there is no shell.
+The operator prepares the wheelhouse separately. It must contain only regular
+wheel files with an exact manifest. Downloading wheels is not permission to build
+or execute them on the host. Dynamic editable-build dependencies can be absent
+from static `build-system.requires`; identify them from the reviewed backend and
+its errors rather than assuming the metadata is complete. The tool does not
+resolve those dependencies automatically or download anything.
+
+Setup always requires working Linux Bubblewrap and `/usr/bin/python3` with venv
+support. It checks the current recorded policy and resolved publication route,
+clean source and wheel manifest before running. The namespace has no network,
+a private home, read-only source/system files/wheelhouse, and one new writable
+environment folder under the configured work directory. It never falls back to
+host setup. Setup alone also exposes the fixed public CA bundle
+`/etc/ssl/certs/ca-certificates.crt` read-only when present, because Debian's pip
+loads it even during offline ensurepip. No other `/etc/ssl` file is mounted.
+The bundle must be a bounded non-symlink file containing certificate blocks only;
+a present symlink, unreadable file, comments or other non-certificate content is
+unsupported and refused, not silently skipped. Its path and SHA-256 are saved as `system_inputs` and checked after setup and by
+`environment-status`. A changed bundle needs a new environment. This does not
+enable networking or disable TLS checks. `--timeout SECONDS` bounds the whole setup worker to 1..1800 seconds
+(default 600); a timeout terminates its process group. Failed attempts retain logs
+and never save a success receipt. Unsupported builds needing source writes,
+services, extra system tools or online access stop here; do not weaken the boundary
+to claim success. The coding assistant itself remains outside this boundary.
+
+Success returns `receipt_file`, `python` and a local setup receipt, not bug proof.
+`environment-status ID RECEIPT.json` validates the exact clean setup tree, base,
+branch, cited files, wheelhouse and a length-prefixed content/mode digest of the
+prepared runtime. Untracked or ignored files and submodules are refused because
+they can supply build inputs not represented by the tracked tree. Preserve those
+files; use a separately reviewed clean checkout rather than deleting them.
+Index flags that hide changes (assume-unchanged, skip-worktree or sparse entries)
+are refused rather than treated as clean source. Editable build backends that need
+to write into the source tree will fail under the read-only mount; this is not a
+reason to disable confinement.
+Any source change, including a later fix commit, requires a new setup. A noneditable
+installed copy may still contain old code; do not infer that it follows later source
+edits. Setup checks establish only what actually ran during this setup attempt.
+
+There is no automatic verification handoff from this receipt. Configure and inspect
+the source-under-test explicitly for the separate native `agent-verify` route;
+fail-before/pass-after verification, policy and publication remain independent.
+Whole-product repository-native setup plus source-correct verification is still
+unresolved. This optional capability does not establish automatic project
+provisioning, an IDE-driver integration, assistant isolation or full acceptance.
+Receipts are unsigned local stale-state guards. Anyone with write access can alter
+both files and receipts; this is not a malicious-host defense or attestation.
