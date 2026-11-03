@@ -658,6 +658,10 @@ branch, cited files, wheelhouse and a length-prefixed content/mode digest of the
 prepared runtime. Untracked or ignored files and submodules are refused because
 they can supply build inputs not represented by the tracked tree. Preserve those
 files; use a separately reviewed clean checkout rather than deleting them.
+Index flags that hide changes (assume-unchanged, skip-worktree or sparse entries)
+are refused rather than treated as clean source. Editable build backends that need
+to write into the source tree will fail under the read-only mount; this is not a
+reason to disable confinement.
 Any source change, including a later fix commit, requires a new setup. A noneditable
 installed copy may still contain old code; do not infer that it follows later source
 edits. Setup checks establish only what actually ran during this setup attempt.

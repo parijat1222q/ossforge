@@ -177,3 +177,26 @@ def test_untracked_setup_inputs_refused_even_when_ignored(setup, ignored):
     with pytest.raises(environment.Invalid, match='untracked or ignored'):
         environment.prepare(cfg, q, 'i', path)
     assert not (Path(cfg.work_dir) / 'environments').exists()
+
+
+@pytest.mark.parametrize('flag', ['--skip-worktree', '--assume-unchanged'])
+def test_hidden_tracked_modification_refused_before_setup(setup, flag):
+    cfg, q, source, path, data = setup
+    git(source, 'update-index', flag, 'value.py')
+    (source / 'value.py').write_text('hidden change=2\n')
+    assert git(source, 'status', '--porcelain') == ''
+    with pytest.raises(environment.Invalid, match='hidden index flags'):
+        environment.prepare(cfg, q, 'i', path)
+    assert not (Path(cfg.work_dir) / 'environments').exists()
+
+
+@pytest.mark.parametrize('flag', ['--skip-worktree', '--assume-unchanged'])
+def test_hidden_tracked_modification_invalidates_existing_receipt(setup, flag):
+    cfg, q, source, path, data = setup
+    available(source)
+    out = environment.prepare(cfg, q, 'i', path)
+    git(source, 'update-index', flag, 'value.py')
+    (source / 'value.py').write_text('hidden change=2\n')
+    assert git(source, 'status', '--porcelain') == ''
+    with pytest.raises(environment.Invalid, match='hidden index flags'):
+        environment.status(cfg, q, 'i', Path(out['receipt_file']))

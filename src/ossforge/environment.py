@@ -184,6 +184,9 @@ def _expand(value: str, substitutions: dict) -> str:
 
 def _source_snapshot(clone: Path, base: str) -> dict:
     # Include ignored files: they can affect backend behavior even with a clean git status.
+    tagged = evidence._git(clone, 'ls-files', '-v', '-z')
+    if any(entry and not entry.startswith('H ') for entry in tagged.split('\x00')):
+        raise Invalid('setup refuses hidden index flags or sparse entries; inspect assume-unchanged/skip-worktree state')
     if evidence._git(clone, 'ls-files', '--others'):
         raise Invalid('setup requires no untracked or ignored files; preserve them and use a separately reviewed clean checkout')
     if evidence._git(clone, 'ls-files', '--stage').startswith('160000 ') or '\n160000 ' in evidence._git(clone, 'ls-files', '--stage'):
