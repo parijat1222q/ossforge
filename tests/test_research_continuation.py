@@ -400,9 +400,13 @@ def test_default_config_missing_is_not_reclassified_as_explicit(tmp_path,monkeyp
     monkeypatch.chdir(tmp_path)
     # Run the genuine dispatch and writer wrapper but avoid digest integration.
     monkeypatch.setattr(cli.digest,'render',lambda *a,**k:'controlled digest')
+    monkeypatch.setattr(cli.patrol,'patrol',lambda *a:[])
+    monkeypatch.setattr(cli.gh,'api',lambda *a,**k:pytest.fail('default-config dispatch fixture must not use live GitHub credentials'))
     result=cli.main(['digest'])
-    assert result != 2
-    assert 'explicit config file unavailable' not in capsys.readouterr().err
+    assert result == 0
+    captured=capsys.readouterr()
+    assert captured.out.strip() == 'controlled digest'
+    assert 'explicit config file unavailable' not in captured.err
 
 
 def test_actual_narrow_collector_never_calls_health_or_acceptance(prior_submission,monkeypatch):
