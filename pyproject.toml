@@ -1,9 +1,14 @@
 [project]
 name = "ossforge"
 version = "0.1.0"
+readme = "README.md"
 description = "Scout, vet, and prepare quality open-source contributions (fix + feature) with a daily cap."
 requires-python = ">=3.10"
 dependencies = ["httpx>=0.27", "pyyaml>=6"]
+
+[project.urls]
+Repository = "https://github.com/parijat1222q/ossforge"
+Documentation = "https://github.com/parijat1222q/ossforge/blob/main/docs/local-ai.md"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.5"]
@@ -24,3 +29,8 @@ line-length = 130
 [tool.ruff.lint]
 select = ["E", "F", "B", "W"]
 ignore = ["E501", "B905"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"AGENTS.md" = "ossforge/public_guides/AGENTS.md"
+"docs/local-ai.md" = "ossforge/public_guides/docs/local-ai.md"
+"ossforge.example.yaml" = "ossforge/public_guides/ossforge.example.yaml"

@@ -48,6 +48,8 @@ def build_parser() -> argparse.ArgumentParser:
             p.add_argument("--" + f.replace("_", "-"), **kw)
         return p
 
+    guide = add("guide", "read packaged public workflow guidance or export to a NEW companion directory")
+    guide.add_argument("--output-dir", help="new destination directory; refuses existing paths and symlinks")
     add("consent-check", "read explicit maintainer admission, without executing or publishing", "repo", issue={"type": int, "default": 0})
     rs = add("research-session", "start or inspect a bounded repo-search session; resume never extends it")
     rs.add_argument("--seconds", type=float)
@@ -174,6 +176,18 @@ def main(argv: list[str] | None = None) -> int:
 
 def _main(argv: list[str] | None = None, *, _state_locked: bool = False, _request=None) -> int:
     a = _request[0] if _request else build_parser().parse_args(argv)
+    if a.cmd == 'guide':
+        from . import guides
+        try:
+            if a.output_dir:
+                print(json.dumps({'files': guides.export(a.output_dir),
+                                  'next': 'Read AGENTS.md and docs/local-ai.md. Copy the example config explicitly; no identity, authentication or workflow state was changed.'}, indent=2))
+            else:
+                print(guides.read('docs/local-ai.md'))
+            return 0
+        except (OSError, ValueError) as exc:
+            print(f'REFUSED: public guide unavailable or destination unsafe: {exc}', file=sys.stderr)
+            return 1
     explicit_config = _request[2] if _request else a.config is not None
     a.config = a.config if explicit_config else "ossforge.yaml"
     if explicit_config and not Path(a.config).is_file():
