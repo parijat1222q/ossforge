@@ -75,7 +75,9 @@ Do not start a nested model process just because you are already an AI assistant
 >   issues/PRs/commits, then reproduce a real defect before editing. Follow target
 >   policy, prepare identity, add a regression and minimal fix on a named branch,
 >   and commit with ossforge commit. Produce the task's exact schema-1 result and
->   run agent-verify. Read failure logs; missing dependencies are not bug proof.
+>   run agent-verify. For the supported prepared Python/pytest source route,
+>   follow the paired receipt/spec completion below, not plain generic argv.
+>   Read failure logs; missing dependencies are not bug proof.
 > - wait_for_cooldown: stop remote work until the recorded retry time. Do not
 >   clear the record or switch accounts. This is not a clean no-find.
 > - review_incomplete_discovery: inspect the previous run journal. Resolve the
@@ -673,11 +675,11 @@ Any source change, including a later fix commit, requires a new setup. A nonedit
 installed copy may still contain old code; do not infer that it follows later source
 edits. Setup checks establish only what actually ran during this setup attempt.
 
-There is no automatic verification handoff from this receipt. Configure and inspect
-the source-under-test explicitly for the separate native `agent-verify` route;
-fail-before/pass-after verification, policy and publication remain independent.
-Whole-product repository-native setup plus source-correct verification is still
-unresolved. This optional capability does not establish automatic project
+Setup alone has no automatic verification handoff. For supported existing Python
+source files with an editable runtime and pytest regressions, use the explicit
+receipt/spec replay completion below. Other layouts and languages still need a
+separately reviewed source-under-test method. Policy and publication remain
+independent. This optional capability does not establish automatic project
 provisioning, an IDE-driver integration, assistant isolation or full acceptance.
 Receipts are unsigned local stale-state guards. Anyone with write access can alter
 both files and receipts; this is not a malicious-host defense or attestation.
@@ -724,8 +726,9 @@ even on refusal; these are not complete subprocess logs.
 This is a local stale-input check, not malicious repository/host attestation or
 proof that a test asserts the right behavior. Python tests and plugins can alter
 Python state; semantic review still matters. Other repository-native checks and
-submission/runtime revalidation remain separate, unresolved handoff work. A
-`python_replay_passed` result is deliberately not an `agent-verify` receipt.
+submission/runtime revalidation require the explicit completion below; the
+standalone replay command does not perform that handoff. A `python_replay_passed`
+result is deliberately not an `agent-verify` receipt.
 There is no generic language, installed-copy rebuild, IDE or full-workflow claim.
 
 ### Explicit replay completion and later stale-input checks
