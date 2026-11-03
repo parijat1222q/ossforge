@@ -121,7 +121,7 @@ def prepare(cfg: Config, queue: Queue, item_id: str, recipe_file: Path, timeout:
     if policy_review.publication_route(cfg, item.repo) not in {'issue_pr', 'pr_only'}:
         raise Invalid('setup requires resolved contribution prerequisites')
     base = evidence._git(clone, 'merge-base', 'HEAD', 'origin/HEAD')
-    snapshot = evidence.capture(clone, base, [])
+    snapshot = _source_snapshot(clone, base)
     recipe, wheelhouse = _recipe(recipe_file, clone)
     parent = Path(cfg.work_dir).absolute() / 'environments'
     if parent.is_symlink() or any(p.is_symlink() for p in parent.parents):
@@ -161,14 +161,17 @@ for i,command in enumerate(commands):
     if rc:
         return {'status': 'environment_failed', 'id': item_id, 'exit_code': rc, 'logs': str(folder),
                 'reason': output, 'warning': 'setup failure is not bug evidence; preserve logs, no host fallback'}
-    current = evidence.capture(clone, base, [])
+    current = _source_snapshot(clone, base)
     if current != snapshot:
-        raise Invalid('checkout changed during setup; environment receipt not saved')
+        raise Invalid(f'checkout changed during setup; environment receipt not saved, inspect logs at {folder}')
     rec = {'schema': 1, 'status': 'environment_prepared', 'id': item_id, 'repo': item.repo,
            'clone': str(clone), 'checkout': snapshot, 'recipe': recipe, 'environment': str(folder),
            'python': str(runtime / 'bin/python'), 'receipt_file': str(folder / 'receipt.json'), 'isolation': 'bwrap-offline-setup',
-           'warning': 'setup only, not fix verification, automatic dependency resolution or assistant isolation'}
-    rec['runtime_sha256'] = _runtime_digest(runtime)
+           'warning': 'setup checks only; installed copies may not follow later edits. No automatic verification handoff, dependency resolution or assistant isolation'}
+    try:
+        rec['runtime_sha256'] = _runtime_digest(runtime)
+    except (ValueError, OSError) as exc:
+        raise Invalid(f'setup runtime cannot be receipted; inspect logs at {folder}: {exc}') from exc
     (folder / 'receipt.json').write_text(json.dumps(rec, indent=2))
     return rec
 
@@ -179,26 +182,41 @@ def _expand(value: str, substitutions: dict) -> str:
     return value
 
 
+def _source_snapshot(clone: Path, base: str) -> dict:
+    # Include ignored files: they can affect backend behavior even with a clean git status.
+    if evidence._git(clone, 'ls-files', '--others'):
+        raise Invalid('setup requires no untracked or ignored files; preserve them and use a separately reviewed clean checkout')
+    if evidence._git(clone, 'ls-files', '--stage').startswith('160000 ') or '\n160000 ' in evidence._git(clone, 'ls-files', '--stage'):
+        raise Invalid('submodule inputs unsupported for bounded setup')
+    return evidence.capture(clone, base, [])
+
+
 def _runtime_digest(runtime: Path) -> str:
     digest = hashlib.sha256()
+    def add(value: bytes):
+        digest.update(len(value).to_bytes(8, 'big'))
+        digest.update(value)
     if not runtime.is_dir() or runtime.is_symlink():
         raise Invalid('prepared runtime missing or replaced')
     for path in sorted(runtime.rglob('*')):
-        if path.is_dir() and not path.is_symlink():
-            continue
-        digest.update(str(path.relative_to(runtime)).encode())
-        digest.update(str(path.lstat().st_mode).encode())
+        add(str(path.relative_to(runtime)).encode())
+        add(str(path.lstat().st_mode).encode())
         if path.is_symlink():
             target = path.resolve(strict=True)
             if target.is_relative_to(runtime):
-                digest.update(str(target.relative_to(runtime)).encode())
+                add(b'internal-link')
+                add(str(target.relative_to(runtime)).encode())
                 continue
             if not str(target).startswith('/usr/') or not target.is_file():
                 raise Invalid('runtime symlink target is not a system interpreter')
-            digest.update(str(target).encode())
-            digest.update(_digest(target).encode())
+            add(b'system-link')
+            add(str(target).encode())
+            add(_digest(target).encode())
         elif path.is_file():
-            digest.update(_digest(path).encode())
+            add(b'file')
+            add(_digest(path).encode())
+        elif path.is_dir():
+            add(b'directory')
         else:
             raise Invalid('runtime contains unsupported special file')
     return digest.hexdigest()
@@ -213,16 +231,16 @@ def status(cfg: Config, queue: Queue, item_id: str, receipt_file: Path) -> dict:
     root = (Path(cfg.work_dir).absolute() / 'environments').resolve()
     if folder.parent != root or receipt_file.resolve() != folder / 'receipt.json':
         raise Invalid('environment receipt is outside the selected workflow')
-    if rec.get('python') != str(folder / 'venv/bin/python'):
+    if rec.get('python') != str(folder / 'venv/bin/python') or rec.get('receipt_file') != str(folder / 'receipt.json'):
         raise Invalid('prepared interpreter path changed')
     snapshot = rec.get('checkout')
     if (not isinstance(snapshot, dict) or any(not isinstance(snapshot.get(k), str) or not snapshot[k]
                                              for k in ('base', 'tree', 'branch')) or not isinstance(rec.get('recipe'), dict)):
         raise Invalid('environment receipt is incomplete; preserve it')
-    now = evidence.capture(clone, snapshot['base'], [])
+    now = _source_snapshot(clone, snapshot['base'])
     current_base = evidence._git(clone, 'merge-base', 'HEAD', 'origin/HEAD')
-    if now['base'] != current_base:
-        raise Invalid('setup base changed; prepare a new environment')
+    if now != snapshot or now['base'] != current_base:
+        raise Invalid('setup source snapshot changed; prepare a new environment')
     _validate_recipe(rec['recipe'], clone)
     runtime = folder / 'venv'
     if _runtime_digest(runtime) != rec.get('runtime_sha256'):

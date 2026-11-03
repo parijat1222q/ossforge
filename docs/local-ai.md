@@ -653,17 +653,20 @@ services, extra system tools or online access stop here; do not weaken the bound
 to claim success. The coding assistant itself remains outside this boundary.
 
 Success returns `receipt_file`, `python` and a local setup receipt, not bug proof.
-`environment-status ID RECEIPT.json` validates the base, cited setup files,
-wheelhouse and a content/mode digest of the prepared runtime. A later clean fix
-commit may proceed when the base and cited setup sources are unchanged. Runtime
-or setup changes require inspection and a new environment. Receipts are local
-stale-state guards, not signed attestations or a malicious-host defense.
+`environment-status ID RECEIPT.json` validates the exact clean setup tree, base,
+branch, cited files, wheelhouse and a length-prefixed content/mode digest of the
+prepared runtime. Untracked or ignored files and submodules are refused because
+they can supply build inputs not represented by the tracked tree. Preserve those
+files; use a separately reviewed clean checkout rather than deleting them.
+Any source change, including a later fix commit, requires a new setup. A noneditable
+installed copy may still contain old code; do not infer that it follows later source
+edits. Setup checks establish only what actually ran during this setup attempt.
 
-Use `agent-verify RESULT.json --environment-receipt RECEIPT.json` to validate the
-setup again and select offline Bubblewrap verification with that runtime mounted
-read-only. The result's test executable must be the receipt's absolute `python`;
-checks should use its installed tools and temporary output paths. The ordinary
-fail-before/pass-after, exact source, policy and separate publication gates remain.
-A setup receipt does not mark an item verified or authorize any public action.
-This optional path is not universal automatic project provisioning, an IDE-driver
-integration, assistant isolation or whole-workflow acceptance.
+There is no automatic verification handoff from this receipt. Configure and inspect
+the source-under-test explicitly for the separate native `agent-verify` route;
+fail-before/pass-after verification, policy and publication remain independent.
+Whole-product repository-native setup plus source-correct verification is still
+unresolved. This optional capability does not establish automatic project
+provisioning, an IDE-driver integration, assistant isolation or full acceptance.
+Receipts are unsigned local stale-state guards. Anyone with write access can alter
+both files and receipts; this is not a malicious-host defense or attestation.

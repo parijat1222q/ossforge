@@ -123,8 +123,7 @@ def build_parser() -> argparse.ArgumentParser:
     ep = add("environment-prepare", "opt-in offline setup from a source-reviewed recipe", "id", "recipe_file")
     ep.add_argument("--timeout", type=int, default=600)
     add("environment-status", "inspect an unchanged prepared environment receipt", "id", "receipt_file")
-    av = add("agent-verify", "validate external-driver result and rerun tests; never publish", "result_file")
-    av.add_argument("--environment-receipt", default=None, help="validate prepared setup and use its runtime with offline bwrap verification")
+    add("agent-verify", "validate external-driver result and rerun tests; never publish", "result_file")
     add("agent-run", "one bounded local external-driver contribution attempt", command={"required": True},
              timeout={"type": float, "default": 900}, daily_attempts={"type": int, "default": 2},
              skip_discovery={"action": "store_true"}, publish={"action": "store_true"})
@@ -462,15 +461,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1
     elif a.cmd == "agent-verify":
         try:
-            proposed = driver.parse(Path(a.result_file))
-            mode, mounts = cfg.verification_isolation, cfg.verification_readonly_paths
-            if a.environment_receipt is not None:
-                prepared = environment.status(cfg, q, proposed['id'], Path(a.environment_receipt))
-                runtime = Path(prepared['python']).parent.parent
-                if proposed.get('outcome') == 'hold' or proposed['test_command'][0] != prepared['python']:
-                    raise environment.Invalid('prepared verification needs the receipt interpreter as test argv executable')
-                mode, mounts = 'bwrap', [str(runtime)]
-            result = driver.complete(q, proposed, isolation_mode=mode, readonly_paths=mounts)
+            result = driver.complete(q, driver.parse(Path(a.result_file)),
+                                     isolation_mode=cfg.verification_isolation, readonly_paths=cfg.verification_readonly_paths)
         except (driver.Invalid, environment.Invalid, OSError, evidence.StaleEvidence) as exc:
             print(f"REFUSED: {exc}", file=sys.stderr)
             return 1

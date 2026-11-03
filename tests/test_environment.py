@@ -70,11 +70,6 @@ def test_public_cli_native_setup_and_status_preserve_checkout(setup, capsys, tmp
     receipt = folder / 'receipt.json'
     assert cli.main(['--config', str(config), 'environment-status', 'i', str(receipt)]) == 0
     capsys.readouterr()
-    # A later genuine source fix does not invalidate unchanged setup guides/base.
-    (source / 'value.py').write_text('value=2\n')
-    git(source, 'add', '.')
-    git(source, 'commit', '-qm', 'fix')
-    assert environment.status(cfg, q, 'i', receipt)['status'] == 'environment_prepared'
     (folder / 'venv/changed').write_text('changed')
     with pytest.raises(environment.Invalid, match='runtime changed'):
         environment.status(cfg, q, 'i', receipt)
@@ -139,7 +134,7 @@ def test_setup_source_change_invalidates_receipt(setup):
     (source / 'SETUP.md').write_text('changed setup instructions\n')
     git(source, 'add', '.')
     git(source, 'commit', '-qm', 'changed setup')
-    with pytest.raises(environment.Invalid, match='setup source changed'):
+    with pytest.raises(environment.Invalid, match='setup source snapshot changed'):
         environment.status(cfg, q, 'i', receipt)
 
 
@@ -153,49 +148,32 @@ def test_setup_timeout_does_not_save_receipt(setup):
     assert not (Path(out['logs']) / 'receipt.json').exists()
 
 
-def test_agent_verify_receipt_selects_containment_not_host_fallback(setup, tmp_path, monkeypatch, capsys):
-    cfg, q, source, path, data = setup
-    available(source)
-    prepared = environment.prepare(cfg, q, 'i', path)
-    config = tmp_path / 'cfg.yaml'
-    config.write_text(f'state_dir: {cfg.state_dir}\nwork_dir: {cfg.work_dir}\nkill_file: {cfg.kill_file}\n')
-    result = {'schema': 1, 'id': 'i', 'base': git(source, 'rev-parse', 'HEAD'), 'branch': 'main',
-              'test_command': [prepared['python'], '-c', 'assert True'], 'check_commands': [],
-              'failure_code': 1, 'issue_title': 'fixture', 'issue_body': 'fixture', 'pr_title': 'fixture',
-              'pr_body': 'fixture', 'consent_issue': 0}
-    result_file = tmp_path / 'result.json'
-    result_file.write_text(json.dumps(result))
-    seen = []
-    monkeypatch.setattr(cli.driver, 'complete', lambda q, result, **kw: seen.append(kw) or {'status': 'verified'})
-    assert cli.main(['--config', str(config), 'agent-verify', str(result_file), '--environment-receipt', prepared['receipt_file']]) == 0
-    assert seen == [{'isolation_mode': 'bwrap', 'readonly_paths': [str(Path(prepared['python']).parent.parent)]}]
-    capsys.readouterr()
-    result['test_command'][0] = '/usr/bin/python3'
-    result_file.write_text(json.dumps(result))
-    assert cli.main(['--config', str(config), 'agent-verify', str(result_file), '--environment-receipt', prepared['receipt_file']]) == 1
-    assert len(seen) == 1
 
 
-def test_actual_prepared_environment_to_native_fix_verification(setup, tmp_path, capsys):
+def test_stale_noneditable_copy_cannot_keep_current_receipt(setup):
     cfg, q, source, path, data = setup
     available(source)
-    prepared = environment.prepare(cfg, q, 'i', path)
-    base = git(source, 'rev-parse', 'HEAD')
-    git(source, 'checkout', '-qb', 'fix/value')
+    data['commands'] = [['{python}', '-c', 'from pathlib import Path;Path("{environment}/venv/installed_copy.py").write_text(Path("{clone}/value.py").read_text())']]
+    path.write_text(json.dumps(data))
+    out = environment.prepare(cfg, q, 'i', path)
+    installed = Path(out['environment']) / 'venv/installed_copy.py'
+    assert installed.read_text() == 'value=1\n'
     (source / 'value.py').write_text('value=2\n')
-    (source / 'test_value.py').write_text('from value import value\nassert value==2\n')
     git(source, 'add', '.')
-    git(source, 'commit', '-qm', 'controlled fix and regression')
-    result = {'schema': 1, 'id': 'i', 'base': base, 'branch': 'fix/value',
-              'test_command': [prepared['python'], 'test_value.py'], 'check_commands': [],
-              'failure_code': 1, 'issue_title': 'controlled fixture', 'issue_body': 'not public',
-              'pr_title': 'controlled fixture', 'pr_body': 'not public', 'consent_issue': 0}
-    result_file = tmp_path / 'result.json'
-    result_file.write_text(json.dumps(result))
-    config = tmp_path / 'cfg.yaml'
-    config.write_text(f'state_dir: {cfg.state_dir}\nwork_dir: {cfg.work_dir}\nkill_file: {cfg.kill_file}\n')
-    assert cli.main(['--config', str(config), 'agent-verify', str(result_file), '--environment-receipt', prepared['receipt_file']]) == 0
-    assert json.loads(capsys.readouterr().out)['status'] == 'verified'
-    saved = Queue(cfg.path('queue.json')).items['i']
-    assert saved.verification['verification_isolation'] == 'bwrap'
-    assert saved.status == 'verified' and git(source, 'status', '--porcelain') == ''
+    git(source, 'commit', '-qm', 'later fix')
+    assert installed.read_text() == 'value=1\n'  # stale installed copy really exists
+    with pytest.raises(environment.Invalid, match='source snapshot changed'):
+        environment.status(cfg, q, 'i', Path(out['receipt_file']))
+
+
+@pytest.mark.parametrize('ignored', [True, False])
+def test_untracked_setup_inputs_refused_even_when_ignored(setup, ignored):
+    cfg, q, source, path, data = setup
+    if ignored:
+        (source / '.gitignore').write_text('local-input\n')
+        git(source, 'add', '.')
+        git(source, 'commit', '-qm', 'ignore local input')
+    (source / 'local-input').write_text('could affect arbitrary setup argv')
+    with pytest.raises(environment.Invalid, match='untracked or ignored'):
+        environment.prepare(cfg, q, 'i', path)
+    assert not (Path(cfg.work_dir) / 'environments').exists()
