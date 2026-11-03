@@ -701,8 +701,10 @@ It never marks a queue item verified and cannot authorize `submit`.
 Map every changed non-test source exactly once. This first route supports only
 existing modified regular Python files; added/deleted sources, configuration,
 build inputs, compiled modules and other languages need a different reviewed
-method. Tests are explicit checkout test-file/node selections, not arbitrary
-pytest options. Both phases use the same regression tests and must collect and
+method. Any tracked `.pyc`, `.pyo` or `__pycache__` input anywhere in the
+checkout is also refused, even if unchanged at the base, because disk source
+hashes do not prove which bytecode Python executes. Tests are explicit checkout test-file/node selections, not arbitrary
+pytest options; duplicate selections and symlinked test ancestors are refused. Both phases use the same regression tests and must collect and
 execute the same nonempty node IDs without skips. Baseline must fail only the
 named call-phase assertions, not setup, teardown, import or collection errors;
 the fixed phase must pass every report.
@@ -716,7 +718,8 @@ setup receipt, source snapshot and observer contents are checked again afterward
 Each native phase has `--timeout` 1..1800 seconds (default600); the native process
 group is terminated on timeout. Runtime and source remain read-only to native
 processes; only a generated observation folder is writable, with no network and
-a private home. Logs are retained even on refusal.
+a private home. Observation JSON and the final 4000 characters of each phase output are retained
+even on refusal; these are not complete subprocess logs.
 
 This is a local stale-input check, not malicious repository/host attestation or
 proof that a test asserts the right behavior. Python tests and plugins can alter

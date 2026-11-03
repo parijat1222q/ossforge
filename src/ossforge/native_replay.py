@@ -25,6 +25,9 @@ def _spec(path: Path, clone: Path, base: str) -> dict:
         raise Invalid('map every modified Python source file to its actual module name')
     if any(not isinstance(k, str) or not isinstance(v, str) for k, v in modules.items()):
         raise Invalid('module mappings must be text names and paths')
+    tracked = evidence._git(clone, 'ls-files', '-z').split('\x00')
+    if any(p.lower().endswith(('.pyc', '.pyo')) or '__pycache__' in Path(p).parts for p in tracked if p):
+        raise Invalid('tracked Python bytecode/cache inputs unsupported; preserve checkout and use a reviewed source-only tree')
     changed = evidence._git(clone, 'diff', '--name-only', '--no-renames', base + '..HEAD').splitlines()
     sources = {p for p in changed if not predictor.is_test_path(p)}
     tests = {p for p in changed if predictor.is_test_path(p)}
@@ -43,9 +46,11 @@ def _spec(path: Path, clone: Path, base: str) -> dict:
     args = spec['tests']
     if not isinstance(args, list) or not 1 <= len(args) <= 30 or any(not isinstance(a, str) or not a or '\x00' in a or a.startswith('-') for a in args):
         raise Invalid('tests must be explicit pytest node selections, not arbitrary pytest options')
+    if len(set(args)) != len(args):
+        raise Invalid('pytest selections must be distinct')
     for arg in args:
         rel = Path(arg.split('::')[0])
-        if rel.is_absolute() or '..' in rel.parts or not (clone / rel).is_file() or (clone / rel).is_symlink():
+        if rel.is_absolute() or '..' in rel.parts or not (clone / rel).is_file() or (clone / rel).is_symlink() or any(p.is_symlink() for p in (clone / rel).parents):
             raise Invalid('pytest selections must be regular test files inside the checkout')
     expected = spec['expected_failures']
     if not isinstance(expected, list) or not 1 <= len(expected) <= 30 or any(not isinstance(v, str) for v in expected) or len(set(expected)) != len(expected):

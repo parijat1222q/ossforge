@@ -104,3 +104,69 @@ def test_actual_pytest_observer(mode, tmp_path):
         assert p.returncode == 1 and observation['problems'] == []
         call = next(r for r in observation['reports'] if r['when'] == 'call')
         assert call['assertion'] == (mode == 'assertion')
+
+
+def test_tracked_unchecked_hash_bytecode_is_real_and_refused(setup, tmp_path):  # noqa: F811
+    import py_compile
+    import subprocess
+    import sys
+    cfg, q, source, recipe, data = setup
+    # Store wrong executable bytes as unchecked-hash bytecode, then restore
+    # mapped source bytes: Python really executes999 despite disk source value1.
+    target = source / 'value.py'
+    target.write_text('value=999\n')
+    py_compile.compile(str(target), doraise=True, invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH)
+    target.write_text('value=1\n')
+    git(source, 'add', '.')
+    git(source, 'add', '-f', '__pycache__')
+    git(source, 'commit', '-qm', 'preexisting tracked cache')
+    base = git(source, 'rev-parse', 'HEAD')
+    output = subprocess.check_output([sys.executable, '-c', 'import value;print(value.value)'], cwd=source, text=True)
+    assert output.strip() == '999'
+    target.write_text('value=2\n')
+    (source / 'tests').mkdir()
+    (source / 'tests/test_value.py').write_text('from value import value\ndef test_value():\n assert value==2\n')
+    git(source, 'add', '.')
+    git(source, 'commit', '-qm', 'fix and regression')
+    spec = tmp_path / 'spec.json'
+    spec.write_text(json.dumps({'schema': 1, 'modules': {'value': 'value.py'}, 'tests': ['tests/test_value.py'], 'expected_failures': ['tests/test_value.py::test_value']}))
+    with pytest.raises(native_replay.Invalid, match='tracked Python bytecode/cache'):
+        native_replay._spec(spec, source, base)
+    assert q.items['i'].status == 'clean'
+
+
+@pytest.mark.parametrize('mode', ['duplicate', 'symlink_parent'])
+def test_test_selections_refuse_duplicates_and_symlink_ancestors(setup, tmp_path, mode):  # noqa: F811
+    cfg, q, source, recipe, data = setup
+    (source / 'value.py').write_text('value=2\n')
+    tests = source / 'tests'
+    tests.mkdir()
+    (tests / 'test_value.py').write_text('def test_value():\n assert True\n')
+    git(source, 'add', '.')
+    git(source, 'commit', '-qm', 'fix and test')
+    args = ['tests/test_value.py']
+    if mode == 'duplicate':
+        args *= 2
+        match = 'distinct'
+    else:
+        outside = tmp_path / 'outside'
+        outside.mkdir()
+        (outside / 'test_other.py').write_text('def test_other():\n assert True\n')
+        (source / 'test_link').symlink_to(outside, target_is_directory=True)
+        git(source, 'add', 'test_link')
+        git(source, 'commit', '-qm', 'tracked directory symlink')
+        # Include link as a test path; mapping's changed-source guard also
+        # refuses symlink source entries, so use prior fixcommit as diff base.
+        base = git(source, 'rev-parse', 'HEAD')
+        (source / 'value.py').write_text('value=3\n')
+        (tests / 'test_value.py').write_text('def test_value():\n assert False\n')
+        git(source, 'add', '.')
+        git(source, 'commit', '-qm', 'next fix and test')
+        args = ['test_link/test_other.py']
+        match = 'regular test files'
+    if mode == 'duplicate':
+        base = git(source, 'rev-parse', 'origin/HEAD')
+    spec = tmp_path / 'spec.json'
+    spec.write_text(json.dumps({'schema':1,'modules':{'value':'value.py'},'tests':args,'expected_failures':['tests/test_value.py::test_value']}))
+    with pytest.raises(native_replay.Invalid, match=match):
+        native_replay._spec(spec, source, base)
