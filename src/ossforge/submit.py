@@ -126,9 +126,9 @@ def _upstream_gate(it: Item) -> None:
         raise Refused("upstream default branch changed or could not be verified; fetch, review/rebase and re-run verification before publishing")
 
 
-def _evidence_gate(it: Item) -> None:
+def _evidence_gate(it: Item, cfg=None) -> None:
     try:
-        evidence.check(Path(it.clone), _item_base(it), it.branch, it.verification, **({"contribution_base": it.contribution_base} if it.contribution_base else {}))
+        evidence.check(Path(it.clone), _item_base(it), it.branch, it.verification, cfg=cfg, **({"contribution_base": it.contribution_base} if it.contribution_base else {}))
     except evidence.StaleEvidence as e:
         raise Refused(str(e)) from e
 
@@ -304,7 +304,7 @@ def preflight(it: Item, limiter: DailyLimiter, cfg: Config, history: list[dict])
     cwd = str(Path(it.clone))
     base = _item_base(it)
     _identity_gate(cfg, cwd, base, it.repo, fork=False)
-    _evidence_gate(it)
+    _evidence_gate(it, cfg)
     _admission_gate(it, cfg)
     changed = _run(["git", "diff", "--name-only", f"{base}..HEAD"], cwd).splitlines()
     diff = _run(["git", "diff", f"{base}..HEAD"], cwd)
@@ -393,7 +393,7 @@ def _submit(it: Item, limiter: DailyLimiter, cfg: Config, audit: safety.Audit, e
     cwd = str(Path(it.clone))
     _base_identity_gate(it, cfg)
     _identity_gate(cfg, cwd, _item_base(it), it.repo, fork=False)  # re-check at the write boundary
-    _evidence_gate(it)  # exact tested content again immediately before the first external write
+    _evidence_gate(it, cfg)  # exact tested content again immediately before the first external write
     _admission_gate(it, cfg)  # current upstream consent, never cached
     # A PR-only resume makes no issue/fork write here. Keep its fresh checks at
     # the PR write boundary below, instead of repeating a no-effect checkpoint.
@@ -418,7 +418,7 @@ def _submit(it: Item, limiter: DailyLimiter, cfg: Config, audit: safety.Audit, e
             raise Refused("source issue URL does not match the target")
         progress(issue_url=url, existing_issue=True)
     if mode != "pr_only" and not prog.get("issue_url"):
-        _evidence_gate(it)
+        _evidence_gate(it, cfg)
         url = _run(["gh", "issue", "create", "-R", it.repo, "-t", it.issue_title, "-b", it.issue_body + note])
         progress(issue_url=url)
         audit.log("issue_opened", repo=it.repo, url=url, item=it.id)
@@ -429,7 +429,7 @@ def _submit(it: Item, limiter: DailyLimiter, cfg: Config, audit: safety.Audit, e
     if not prog.get("fork_pushed"):
         _repo_access_gate(it)
         gh.pace_write()
-        _evidence_gate(it)
+        _evidence_gate(it, cfg)
         subprocess.run(["gh", "repo", "fork", it.repo, "--clone=false"], capture_output=True)
         fork = f"https://github.com/{me}/{it.repo.split('/')[1]}.git"
         have = subprocess.run(["git", "remote"], cwd=cwd, capture_output=True, text=True).stdout.split()
@@ -438,7 +438,7 @@ def _submit(it: Item, limiter: DailyLimiter, cfg: Config, audit: safety.Audit, e
             _ensure_signoff(cwd, _item_base(it))
         _identity_gate(cfg, cwd, _item_base(it), it.repo, fork=True)  # the destination is the operator's own fork
         _admission_gate(it, cfg)
-        _evidence_gate(it)  # signoff may rewrite commits, but must not change the tested tree
+        _evidence_gate(it, cfg)  # signoff may rewrite commits, but must not change the tested tree
         _run(["git", "push", "-u", "fork", it.branch], cwd)
         progress(fork_pushed=True)
 
@@ -453,7 +453,7 @@ def _submit(it: Item, limiter: DailyLimiter, cfg: Config, audit: safety.Audit, e
         body = it.pr_body + (f"\n\nCloses #{num}" if num else "") + note
         _admission_gate(it, cfg)
         draft = ["--draft"] if cfg.maintainer_admission else []
-        _evidence_gate(it)
+        _evidence_gate(it, cfg)
         base_args = ["--base", it.contribution_base["branch"]] if it.contribution_base else []
         url = _run(["gh", "pr", "create", *draft, *base_args, "-R", it.repo, "--head", f"{me}:{it.branch}", "-t", it.pr_title, "-b", body], cwd)
         progress(pr_url=url)

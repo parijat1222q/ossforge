@@ -134,7 +134,7 @@ def task(cfg, *, refresh_policy=True):
     if record['status'] == 'awaiting_owner_review':
         from . import evidence
         receipt = record['verification']['evidence']
-        evidence.check(Path(record['clone']), record['base'], receipt['branch'], receipt)
+        evidence.check(Path(record['clone']), record['base'], receipt['branch'], receipt, cfg=cfg)
         return {**record, 'next': 'STOP: awaiting owner review of local artifacts; no commit, verification or publication action',
                 'warning': 'review is not permission to override source restrictions'}
     return {**record, 'result_schema': {'schema': 1, 'id': record['id'], 'base': record['base'],
@@ -172,7 +172,7 @@ def complete(cfg, result):
         isolation_mode=cfg.verification_isolation, readonly_paths=cfg.verification_readonly_paths)
     if not outcome.ok:
         return {'status': 'local_verification_failed', 'log': outcome.log, 'publication_hold': True}
-    evidence.check(root, record['base'], result['branch'], outcome.evidence)
+    evidence.check(root, record['base'], result['branch'], outcome.evidence, cfg=cfg)
     identity.require(identity.check_upstream(str(root), record['repo']) + identity.check_login(cfg) + identity.check_worktree(cfg, str(root), record['base']))
     patch = subprocess.run(['git', 'diff', '--binary', record['base'], 'HEAD'], cwd=root,
                            capture_output=True, check=True).stdout

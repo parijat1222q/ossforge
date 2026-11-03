@@ -14,7 +14,7 @@ def fixture(tmp_path, monkeypatch):
                 clone=str(tmp_path), branch='fix', verification={'schema': 1})
     q.add(item)
     monkeypatch.setattr(agent_next.submit, '_base', lambda *a: 'base')
-    monkeypatch.setattr(evidence, 'check', lambda *a: None)
+    monkeypatch.setattr(evidence, 'check', lambda *a, **kw: None)
     return cfg, q, item
 
 
@@ -46,7 +46,7 @@ def test_partial_effect_requires_remote_reconciliation_before_retry(tmp_path, mo
 
 def test_stale_receipt_preserves_work(tmp_path, monkeypatch):
     cfg, q, item = fixture(tmp_path, monkeypatch)
-    monkeypatch.setattr(evidence, 'check', lambda *a: (_ for _ in ()).throw(evidence.StaleEvidence('tree changed')))
+    monkeypatch.setattr(evidence, 'check', lambda *a, **kw: (_ for _ in ()).throw(evidence.StaleEvidence('tree changed')))
     assert agent_next.next_step(cfg, q, 'c')['status'] == 'inspect_local'
     assert item.status == 'verified'
 

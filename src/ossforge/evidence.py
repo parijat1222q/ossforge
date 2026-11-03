@@ -34,7 +34,7 @@ def capture(clone: Path, base: str, commands: list[list[str]], *, contribution_b
             "commands": commands}, contribution_base or {})
 
 
-def check(clone: Path, base: str, branch: str, receipt: dict, *, contribution_base: dict | None = None) -> None:
+def check(clone: Path, base: str, branch: str, receipt: dict, *, contribution_base: dict | None = None, cfg=None) -> None:
     if not receipt or receipt.get("schema") != 1 or not receipt.get("commands"):
         raise StaleEvidence("verification evidence missing or unsupported; re-run verify")
     try:
