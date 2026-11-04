@@ -1,4 +1,7 @@
-# Copy to ossforge.yaml. Every key is optional.
+# New setup: copy to local ossforge.yaml, then fill the three identity values below.
+# Do not put passwords/tokens here. Run doctor and whoami before the IDE prompt.
+# Other keys are optional; repo_first is an explicit workflow choice.
+repo_first: false         # true for repository-first IDE research; no search starts merely by setting this
 daily_cap: 2              # hard maximum is 2 regardless of this value
 signoff: false            # true = add DCO Signed-off-by everywhere. Prefer signoff_repos below: a sign-off is your own attestation
 signoff_repos: []         # repos ("owner/name") where you approved the DCO sign-off after reading it

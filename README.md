@@ -85,15 +85,17 @@ After an interrupted or uncertain write, preserve and reconcile the existing sta
 | Git | cloning, branches, commits | `git --version` |
 | [GitHub CLI](https://cli.github.com/) (`gh`) | all GitHub access (no token handling in ossforge) | `gh --version` |
 
-### 2. Log in to GitHub and set your identity
+### 2. Log in to GitHub and inspect your identity
 
 ```bash
 gh auth login                         # choose GitHub.com, HTTPS, log in via browser
-git config --global user.name  "Your Name"
-git config --global user.email "you@example.com"
+gh auth status                        # check the active account is yours
 ```
 
-Commits use **this** identity; set the same values as `github_user`, `git_name`, `git_email` in `ossforge.yaml` (publishing stops until they match). Use the name you want on your contributions.
+GitHub authentication is separate from ossforge configuration. Use GitHub CLI's
+browser sign-in; do not paste passwords, access tokens or recovery codes into
+`ossforge.yaml`, a prompt or a committed file. The config below contains only your
+non-secret GitHub username and the name/email you choose for commits.
 
 ### 3. Install: normal use or development
 
@@ -145,22 +147,72 @@ your coding assistant and copy its example config to `ossforge.yaml`. Existing
 paths are refused, never overwritten. Exporting guides does not configure
 identity, sign in, install a model, start a search or authorize publication.
 
-### 4. Configure (optional)
+### 4. Fill your local config before the IDE's initial prompt
 
-```bash
-cp ossforge.example.yaml ossforge.yaml     # Windows: copy ossforge.example.yaml ossforge.yaml
+Do this in the checkout root (or the exported companion folder for a future
+wheel), with the installed virtual environment active. **Create `ossforge.yaml`
+from `ossforge.example.yaml` only if it does not already exist.** Preserve an
+existing config and its workflow state; do not overwrite them to restart a trial.
+
+```powershell
+# Windows PowerShell, new setup only
+if (Test-Path ossforge.yaml) { throw "Preserve the existing ossforge.yaml" }
+Copy-Item ossforge.example.yaml ossforge.yaml
 ```
 
-Every key is optional; defaults are safe.
+```bash
+# macOS / Linux, new setup only
+cp -n ossforge.example.yaml ossforge.yaml
+```
+
+Edit **`ossforge.yaml`**, not the shared example. Replace these three empty values
+with your own details; the placeholders below are not working credentials:
+
+```yaml
+github_user: "YOUR_GITHUB_USERNAME"
+git_name: "Your Commit Name"
+git_email: "your-commit-email@example.com"
+repo_first: true  # repository-first IDE workflow; false keeps issue-only mode
+```
+
+- `github_user`: the active username shown by `gh auth status`, without `@`.
+- `git_name`: the author and committer name you want on contributions.
+- `git_email`: an email linked to your GitHub account, or your GitHub-provided
+  no-reply address if that is your chosen public commit identity.
+
+Check the effective Git values from this folder:
+
+```bash
+git var GIT_AUTHOR_IDENT
+git var GIT_COMMITTER_IDENT
+```
+
+If they are missing or not the identity you chose, set this checkout's local
+values yourself, then check again (no global change is needed):
+
+```bash
+git config --local user.name "Your Commit Name"
+git config --local user.email "your-commit-email@example.com"
+```
+
+For target clones, ossforge's `prepare` command checks and sets their local
+identity from your config. Do not change environment overrides or unrelated
+repositories just to get past a mismatch; inspect and fix your chosen setup first.
+
+`ossforge.yaml` is git-ignored. No source file, `AGENTS.md` or `docs/local-ai.md`
+needs your identity added to it. Leave `daily_cap: 2`, `auto_submit: false`,
+`signoff: false` and `signoff_repos: []` unless you intentionally choose otherwise;
+DCO/CLA approval is separate. Other settings are optional. `repo_first` is an
+explicit workflow choice, not a search allowance or permission to publish.
 
 | Key | Default | Meaning |
 |---|---|---|
+| `repo_first` | `false` | set `true` for the repository-first IDE workflow |
 | `daily_cap` | `2` | PRs per day (hard max 2) |
 | `signoff` | `false` | add DCO `Signed-off-by` to every repo; prefer `signoff_repos` |
 | `signoff_repos` | `[]` | repos where you approved the DCO sign-off |
 | `github_user`, `git_name`, `git_email` | empty | expected identity; required to publish |
 | `disclosure` | `auto` | AI-assistance note: `auto` = follow the repo's docs (stops when unclear), `true` = always, `false` = never (stops if the repo requires it) |
-| `github_user` | gh login | your login, used by `bootstrap` |
 | `min_repo_score` | `60` | minimum repo health score (0-100) |
 | `min_stars` | `500` | ignore tiny repos |
 | `languages` | `[python]` | languages to scout |
@@ -170,14 +222,35 @@ Every key is optional; defaults are safe.
 | `auto_submit` | `false` | let the loop submit already-verified items |
 | `patch_command` | `""` | optional shell command that drafts a patch; env `OSSFORGE_ITEM` = item id |
 
-### 5. Check it works
+### 5. Verify readiness, then give the IDE its initial prompt
+
+From the same root and active virtual environment, run:
 
 ```bash
-ossforge doctor                 # git identity, gh login, ruff, config
-ossforge bootstrap              # optional: learn from your merged/closed PRs so scout prefers repos that merged you (closed PRs are listed but never lower a score, since a closure can mean duplicate, superseded or withdrawn)
-# Developer checkout only: python -m pytest -q
-ossforge radar pallets/click    # prints a health score for a repo
+ossforge --config ossforge.yaml doctor
+ossforge --config ossforge.yaml whoami
+ossforge --config ossforge.yaml agent-next
 ```
+
+Continue only when `doctor` reports every check `[ok]` and `whoami` says
+`READY to publish`. That message checks identity, not permission to publish a
+particular contribution. Fix a missing login/config, identity mismatch or missing
+Ruff first; do not ask the IDE to guess your identity or bypass a refusal. A
+`stopped` checkpoint means preserve STOP and wait for the owner. An existing
+checkpoint or interrupted work is not a fresh setup; preserve and reconcile it.
+
+Only then open this root in your AI IDE, confirm its own sign-in/terminal access,
+and use the [one starter prompt in docs/local-ai.md](docs/local-ai.md#one-starter-prompt-for-an-assistant-already-running-in-an-ide).
+Give the assistant the exact config filename/root, your search duration and the
+scope you approve (for example local preparation only, or a specific publication
+grant). Do not put passwords or tokens in the prompt. Installing/configuring and
+these readiness checks do not start repository discovery, renew an allowance or
+authorize publication. The assistant must still inspect the actual checkpoint,
+repository rules, duplicates and native test evidence.
+
+`ossforge bootstrap` is an optional later step to learn from your GitHub PR
+history. It is not needed before the first prompt. A target repository's test
+dependencies and the AI IDE's authentication/usage limits are still separate.
 
 ## Where files go (you do not create these)
 

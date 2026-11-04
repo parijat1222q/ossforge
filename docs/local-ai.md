@@ -4,6 +4,33 @@ This is a public contract for Claude Code or another local coding assistant. It
 makes no model calls and requires no API key in ossforge. Use your own assistant's
 normal authentication. A provider subscription and usage limits are separate.
 
+## Before giving the initial prompt
+
+Finish the README's normal-user installation and local configuration first.
+For a new setup, copy `ossforge.example.yaml` to `ossforge.yaml` only if the latter
+does not exist. Edit the local copy: `github_user` is your active `gh auth status`
+username; `git_name` and `git_email` are your chosen commit identity and must match
+both `git var GIT_AUTHOR_IDENT` and `git var GIT_COMMITTER_IDENT`. Set
+`repo_first: true` if you choose the repository-first workflow. Do not add your
+identity to source files or this guide, and do not put passwords/tokens in config
+or prompts. GitHub CLI browser sign-in and your IDE's own sign-in are separate.
+
+In that root with ossforge's virtual environment active, run:
+
+```bash
+ossforge --config ossforge.yaml doctor
+ossforge --config ossforge.yaml whoami
+ossforge --config ossforge.yaml agent-next
+```
+
+All doctor checks must be `[ok]`; whoami must say `READY to publish`. A missing
+config, login or identity is a setup prerequisite, not a bug or a contribution
+success. Fix it before the first prompt. Preserve a STOP marker or existing work
+and follow its checkpoint instead of overwriting config/state to get a fresh run.
+These checks do not start discovery. Give the assistant the exact root/config,
+an explicit search allowance and the scope you authorize; readiness is not
+publication approval. Target test dependencies may still need their own setup.
+
 ## One starter prompt for an assistant already running in an IDE
 
 Open this checkout in Claude Code, Antigravity or another coding assistant with a

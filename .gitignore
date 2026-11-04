@@ -6,3 +6,6 @@ __pycache__/
 *.egg-info/
 .venv/
 .ruff_cache/
+
+# Local non-secret identity and workflow configuration
+/ossforge.yaml
