@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import shlex
 import dataclasses
 import json
@@ -173,6 +174,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Preserve the terminal/pipe encoding, but escape characters it cannot render.
+    # Policy text and refusal messages must not fail on legacy Windows code pages.
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper) and not stream.closed:
+            stream.reconfigure(errors="backslashreplace")
     return _main(argv)
 
 
