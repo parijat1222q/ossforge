@@ -1,6 +1,15 @@
+import pytest
+
 from ossforge import loop, scout, vet
 from ossforge.config import Config
 from ossforge.queue import Queue
+
+
+@pytest.fixture(autouse=True)
+def isolated_mock_scout_funnel(monkeypatch):
+    # These tests replace scout itself, so provide the fresh funnel state that a real
+    # scout call would clear and update rather than inheriting another test's stop state.
+    monkeypatch.setattr(scout, 'LAST_FUNNEL', {})
 
 
 def test_loop_keeps_approved_issue_for_external_driver_when_static_scan_empty(tmp_path, monkeypatch):

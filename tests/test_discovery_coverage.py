@@ -5,6 +5,13 @@ from ossforge.config import Config
 from ossforge.outcomes import Stats
 
 
+@pytest.fixture(autouse=True)
+def isolated_funnel(monkeypatch):
+    # The mocked scout mutates this shared object. Restore it after each test,
+    # the real scout clears and updates its funnel on every call.
+    monkeypatch.setattr(scout, 'LAST_FUNNEL', {})
+
+
 @pytest.mark.parametrize("preferred,history,stride", [(False, False, 1), (False, True, 2), (True, False, 2), (True, True, 3)])
 def test_rotating_broad_turns_cover_all_first_page_windows(monkeypatch, tmp_path, preferred, history, stride):
     cfg = Config(state_dir=str(tmp_path), preferred_repos=["preferred/lib"] if preferred else [])
