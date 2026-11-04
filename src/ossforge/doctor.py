@@ -24,7 +24,8 @@ def check(cfg: Config) -> list[tuple[str, bool, str]]:
     for tool in ("git", "gh"):
         res.append((f"{tool} on PATH", shutil.which(tool) is not None, shutil.which(tool) or "missing"))
     rc, out = _out([sys.executable, "-m", "ruff", "--version"])
-    res.append(("ruff via current Python", rc == 0, out or "missing from current Python; install ossforge dev dependencies"))
+    res.append(("ruff via current Python", rc == 0, out if rc == 0 else
+                (out + "; " if out else "") + "install ossforge[tools] in this environment"))
     if shutil.which("gh"):
         rc, out = _out(["gh", "auth", "status"])
         res.append(("gh logged in", rc == 0, out.splitlines()[0] if out else ""))

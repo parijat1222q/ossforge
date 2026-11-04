@@ -11,6 +11,8 @@ Repository = "https://github.com/parijat1222q/ossforge"
 Documentation = "https://github.com/parijat1222q/ossforge/blob/main/docs/local-ai.md"
 
 [project.optional-dependencies]
+# Normal users need Ruff in this Python environment for doctor and source scanning.
+tools = ["ruff>=0.5"]
 dev = ["pytest>=8", "ruff>=0.5"]
 
 [project.scripts]

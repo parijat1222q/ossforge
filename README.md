@@ -95,7 +95,13 @@ git config --global user.email "you@example.com"
 
 Commits use **this** identity; set the same values as `github_user`, `git_name`, `git_email` in `ossforge.yaml` (publishing stops until they match). Use the name you want on your contributions.
 
-### 3. Install
+### 3. Install: normal use or development
+
+**Normal use** means contributing to other projects with ossforge, not editing
+ossforge itself. The current distribution route is this GitHub source checkout;
+a public wheel/PyPI release is not available yet. Cloning downloads source, while
+installing puts the CLI into your Python environment. Use a regular, non-editable
+install with the verification tools, without ossforge's own developer test suite:
 
 ```bash
 git clone https://github.com/parijat1222q/ossforge.git
@@ -103,19 +109,41 @@ cd ossforge
 python -m venv .venv
 # Windows (PowerShell):  .venv\Scripts\Activate.ps1
 # macOS / Linux:         source .venv/bin/activate
-pip install -e ".[dev]"
+python -m pip install ".[tools]"
 ```
 
-`.[dev]` also installs `pytest` and `ruff`. ossforge uses `ruff` for extra bug detection and for linting during
-`verify`, so keep it installed.
+The `tools` extra installs Ruff in the same Python environment as ossforge.
+`doctor` and source scanning need that copy, not an unrelated executable on PATH.
+It does not install ossforge's developer test suite or an AI model. A target
+repository can require its own interpreter and test dependencies; those are
+separate from this installation. Your coding assistant uses its own sign-in and
+usage limits.
 
-For an installed wheel, `ossforge guide` prints the packaged public workflow.
-`ossforge guide --output-dir ossforge-workspace` creates a **new** companion
-folder containing `AGENTS.md`, `docs/local-ai.md` and the example config. Open
-that folder in your coding assistant and read the guides before starting. Existing
-paths are refused, never overwritten. This exports guidance only: it does not
-configure identity, sign in, install a model, start a search or authorize publication.
-The clone/editable installation above already contains these files.
+For **ossforge development**, use the same clone and virtual environment but
+install editable source with developer tools instead:
+
+```bash
+python -m pip install -e ".[dev]"
+python -m pytest -q
+python -m ruff check src tests
+```
+
+`-e` makes local source edits visible to the installed CLI. `dev` includes pytest
+and Ruff; tests live in `tests/`, runtime code in `src/ossforge/`. Normal users do
+not need to run ossforge's whole test suite. Both installs retain the same policy,
+identity and verification safeguards. There is no second product codebase.
+
+The checkout already contains `AGENTS.md`, `docs/local-ai.md` and the example
+config. Open it in your coding assistant and follow those public guides. Finish
+configuration and `doctor`/`whoami` checks below before starting work; installation
+alone does not sign in, authorize publication or start a search.
+
+For a wheel obtained from a verified future release, `ossforge guide` prints the
+packaged workflow. `ossforge guide --output-dir ossforge-workspace` creates a
+**new** companion folder containing those three public files. Open that folder in
+your coding assistant and copy its example config to `ossforge.yaml`. Existing
+paths are refused, never overwritten. Exporting guides does not configure
+identity, sign in, install a model, start a search or authorize publication.
 
 ### 4. Configure (optional)
 
@@ -147,7 +175,7 @@ Every key is optional; defaults are safe.
 ```bash
 ossforge doctor                 # git identity, gh login, ruff, config
 ossforge bootstrap              # optional: learn from your merged/closed PRs so scout prefers repos that merged you (closed PRs are listed but never lower a score, since a closure can mean duplicate, superseded or withdrawn)
-pytest -q                       # all tests should pass
+# Developer checkout only: python -m pytest -q
 ossforge radar pallets/click    # prints a health score for a repo
 ```
 
